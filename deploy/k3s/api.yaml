@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iff-api
+  namespace: iff-audio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iff-api
+  template:
+    metadata:
+      labels:
+        app: iff-api
+    spec:
+      containers:
+        - name: api
+          image: iff-api:local
+          ports:
+            - containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: LIBRARY_PATH
+              value: "/library"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: iff-api
+                  key: DATABASE_URL
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: iff-api
+                  key: SESSION_SECRET
+            - name: COOKIE_SECURE
+              valueFrom:
+                secretKeyRef:
+                  name: iff-api
+                  key: COOKIE_SECURE
+          volumeMounts:
+            - name: library
+              mountPath: /library
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: library
+          persistentVolumeClaim:
+            claimName: iff-library
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iff-api
+  namespace: iff-audio
+spec:
+  selector:
+    app: iff-api
+  ports:
+    - port: 3000
+      targetPort: 3000

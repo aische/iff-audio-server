@@ -1,0 +1,19 @@
+{
+    "name": "iff-audio-server",
+    "private": true,
+    "workspaces": [
+        "apps/*",
+        "packages/*"
+    ],
+    "scripts": {
+        "dev": "concurrently -n api,web -c blue,green \"npm run dev -w api\" \"npm run dev -w web\"",
+        "build": "npm run build --workspaces --if-present",
+        "lint": "npm run lint --workspaces --if-present",
+        "docker:build": "docker build --platform linux/amd64 -f deploy/k3s/Dockerfile.api -t iff-api:local . && docker build --platform linux/amd64 -f deploy/k3s/Dockerfile.web -t iff-web:local .",
+        "deploy:k3s:upload": "./deploy/k3s/deploy.sh upload",
+        "deploy:k3s:apply": "./deploy/k3s/deploy.sh apply"
+    },
+    "devDependencies": {
+        "concurrently": "^9.2.1"
+    }
+}

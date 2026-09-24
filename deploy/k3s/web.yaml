@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iff-web
+  namespace: iff-audio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iff-web
+  template:
+    metadata:
+      labels:
+        app: iff-web
+    spec:
+      containers:
+        - name: web
+          image: iff-web:local
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              # deploy.sh apply replaces @BASE_PATH@ from site.yaml (web Ingress path)
+              path: @BASE_PATH@/
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iff-web
+  namespace: iff-audio
+spec:
+  selector:
+    app: iff-web
+  ports:
+    - port: 80
+      targetPort: 80

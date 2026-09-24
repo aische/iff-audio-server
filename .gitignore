@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Builds / caches
+dist/
+build/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# Env & secrets (keep examples)
+.env
+.env.*
+!.env.example
+deploy/k3s/site.yaml
+deploy/k3s/kubeconfig
+deploy/k3s/*.kubeconfig
+**/k3s.yaml
+
+# Logs & debug
+logs/
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Test / coverage
+coverage/
+
+# Local data (Compose volumes, MP3 library folder)
+data/
+tmp/
+*.wav
+*.aiff
+*.aif
+*.mp3
+
+# Optional: if you generate lock-adjacent junk
+.npm/

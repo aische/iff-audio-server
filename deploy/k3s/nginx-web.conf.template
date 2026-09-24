@@ -1,0 +1,13 @@
+server {
+  listen 80;
+  server_name _;
+  root /usr/share/nginx/html;
+
+  location @BASE_PATH@/ {
+    try_files $uri $uri/ @BASE_PATH@/index.html;
+  }
+
+  location = @BASE_PATH@ {
+    return 301 @BASE_PATH@/;
+  }
+}

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: iff-library
+  namespace: iff-audio
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # Empty class + volumeName → bind to the hostPath PV (see site.example.yaml)
+  storageClassName: ""
+  volumeName: iff-library-pv
+  resources:
+    requests:
+      storage: 50Gi

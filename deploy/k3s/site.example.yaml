@@ -1,0 +1,77 @@
+# Copy to site.yaml (gitignored). See deploy-k3s.md.
+# Edit: Secret, hostPath, Ingress host + paths (API = <web>/api(/|$)(.*)).
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: iff-api
+  namespace: iff-audio
+type: Opaque
+stringData:
+  POSTGRES_USER: iff
+  POSTGRES_PASSWORD: change-me
+  POSTGRES_DB: iff
+  # Must match the postgres Service name (iff-postgres) and password above
+  DATABASE_URL: postgresql://iff:change-me@iff-postgres:5432/iff
+  # openssl rand -base64 32
+  SESSION_SECRET: change-me-to-a-long-random-string
+  COOKIE_SECURE: "true"
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: iff-library-pv
+spec:
+  capacity:
+    storage: 50Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    # Flat folder of *.mp3 files on the k3s node (no subdirectories).
+    path: /path/on/server/to/your/mp3s
+    type: DirectoryOrCreate
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: iff-audio-api
+  namespace: iff-audio
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: your.example.com
+      http:
+        paths:
+          - path: /apppath/api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: iff-api
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: iff-audio-web
+  namespace: iff-audio
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: your.example.com
+      http:
+        paths:
+          - path: /apppath
+            pathType: Prefix
+            backend:
+              service:
+                name: iff-web
+                port:
+                  number: 80

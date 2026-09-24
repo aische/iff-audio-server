@@ -1,0 +1,26 @@
+# Run via MIGRATE=1 deploy:k3s:apply (or delete job + re-apply remotely).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: iff-migrate
+  namespace: iff-audio
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: iff-migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: iff-api:local
+          workingDir: /app
+          command: ["npm", "run", "migrate", "-w", "@iff/db"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: iff-api
+                  key: DATABASE_URL
