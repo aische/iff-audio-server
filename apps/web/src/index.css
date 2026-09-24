@@ -525,6 +525,11 @@ body {
   min-width: 160px;
 }
 
+.arr-name-input:disabled {
+  opacity: 0.85;
+  color: #c4c7cc;
+}
+
 .arr-muted {
   color: #9aa0a6;
 }
@@ -551,6 +556,19 @@ body {
 .arr-list-body {
   padding: 12px;
   max-width: 720px;
+}
+
+.arr-list-section {
+  margin-bottom: 20px;
+}
+
+.arr-list-heading {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: lowercase;
+  color: #9aa0a6;
+  letter-spacing: 0.02em;
 }
 
 .arr-create {
@@ -702,6 +720,14 @@ body {
   overflow: auto;
   background: #1a1c1e;
   overscroll-behavior: contain;
+}
+
+.arr-timeline-readonly .arr-clip {
+  cursor: default;
+}
+
+.arr-timeline-readonly .arr-clip-handle {
+  display: none;
 }
 
 .arr-timeline {

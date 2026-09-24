@@ -327,6 +327,7 @@ function PoolView({
       )}
       {mode === "arrange" ? (
         <ArrangeShell
+          user={user}
           tracks={tracks}
           onBack={() => setMode("pool")}
           onError={onError}
