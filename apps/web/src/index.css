@@ -991,7 +991,7 @@ body {
   position: absolute;
   top: 0;
   box-sizing: border-box;
-  border: 1px solid rgb(232 93 76 / 85%);
+  border: none;
   background: transparent;
   cursor: grab;
   touch-action: none;
@@ -1007,26 +1007,39 @@ body {
   cursor: grabbing;
 }
 
+/* Wide invisible hit target; the visible trim mark is the ::after line. */
 .arr-editor-handle {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 8px;
+  width: 12px;
   cursor: ew-resize;
-  background: rgb(232 93 76 / 45%);
+  background: transparent;
   z-index: 3;
 }
 
 .arr-editor-handle.left {
-  left: 0;
+  left: -6px;
 }
 
 .arr-editor-handle.right {
-  right: 0;
+  right: -6px;
 }
 
-.arr-editor-handle:hover {
-  background: rgb(232 93 76 / 75%);
+.arr-editor-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  margin-left: -0.5px;
+  background: rgb(232 93 76 / 95%);
+  pointer-events: none;
+}
+
+.arr-editor-handle:hover::after {
+  background: rgb(255 160 140);
 }
 
 .arr-root .filterButton {
