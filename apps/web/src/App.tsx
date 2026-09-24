@@ -9,7 +9,6 @@ import {
 } from "react";
 import {
   api,
-  parseTags,
   trackStreamUrl,
   unifiedTags,
   type Comment,
@@ -658,20 +657,6 @@ function TrackRow({
             <li key={c.id}>
               <span className="other-email">{c.userEmail}</span>
               <span className="other-body">{c.body}</span>
-              {parseTags(c.body).length > 0 && (
-                <span className="other-tags">
-                  {parseTags(c.body).map((tag) => (
-                    <button
-                      key={tag}
-                      type="button"
-                      className="tagButton"
-                      onClick={() => onTagClick(tag)}
-                    >
-                      {tag}
-                    </button>
-                  ))}
-                </span>
-              )}
             </li>
           ))}
         </ul>
