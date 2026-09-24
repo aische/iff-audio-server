@@ -879,6 +879,12 @@ body {
   min-width: 2.75rem;
 }
 
+.arr-row-play {
+  padding: 2px 8px;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
 .arr-row-remove {
   padding: 2px 7px;
   flex-shrink: 0;

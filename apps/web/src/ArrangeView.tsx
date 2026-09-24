@@ -53,6 +53,7 @@ type AudioSlot = {
   audio: HTMLAudioElement;
   source: MediaElementAudioSourceNode;
   gainNode: GainNode;
+  trackId: string;
 };
 
 function newInstanceId() {
@@ -494,6 +495,9 @@ function ArrangeEditor({
   const [peaksVersion, setPeaksVersion] = useState(0);
   const [dragClipId, setDragClipId] = useState<string | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
+  /** When set, transport stops at this arrangement time (solo clip audition). */
+  const [soloEndSec, setSoloEndSec] = useState<number | null>(null);
+  const [soloClipId, setSoloClipId] = useState<string | null>(null);
 
   const clipsRef = useRef(clips);
   clipsRef.current = clips;
@@ -501,9 +505,14 @@ function ArrangeEditor({
   playRef.current = playing;
   const playheadRef = useRef(playheadSec);
   playheadRef.current = playheadSec;
+  const soloEndRef = useRef<number | null>(null);
+  soloEndRef.current = soloEndSec;
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const slotsRef = useRef<Map<string, AudioSlot>>(new Map());
+  const slotInflightRef = useRef<Map<string, Promise<AudioSlot>>>(new Map());
+  /** Shared blob: URLs so MediaElementSource is same-origin (no CORS silence). */
+  const objectUrlsRef = useRef<Map<string, string>>(new Map());
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
 
@@ -581,25 +590,77 @@ function ArrangeEditor({
     return audioCtxRef.current;
   }
 
-  function getSlot(instanceId: string, trackId: string): AudioSlot {
-    let slot = slotsRef.current.get(instanceId);
-    if (slot) return slot;
-    const ctx = ensureAudioCtx();
-    const audio = new Audio(trackStreamUrl(trackId));
-    audio.preload = "auto";
-    // Required for MediaElementSource + cookie session across origins.
-    audio.crossOrigin = "use-credentials";
-    const source = ctx.createMediaElementSource(audio);
-    const gainNode = ctx.createGain();
-    source.connect(gainNode);
-    gainNode.connect(ctx.destination);
-    slot = { audio, source, gainNode };
-    slotsRef.current.set(instanceId, slot);
-    return slot;
+  async function ensureTrackObjectUrl(trackId: string): Promise<string> {
+    const cached = objectUrlsRef.current.get(trackId);
+    if (cached) return cached;
+    const res = await fetch(trackStreamUrl(trackId), { credentials: "include" });
+    if (!res.ok) {
+      throw new Error(`Failed to load audio (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    objectUrlsRef.current.set(trackId, url);
+    return url;
+  }
+
+  function waitForMetadata(audio: HTMLAudioElement): Promise<void> {
+    if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      const onMeta = () => {
+        cleanup();
+        resolve();
+      };
+      const onErr = () => {
+        cleanup();
+        reject(audio.error ?? new Error("audio load failed"));
+      };
+      const cleanup = () => {
+        audio.removeEventListener("loadedmetadata", onMeta);
+        audio.removeEventListener("error", onErr);
+      };
+      audio.addEventListener("loadedmetadata", onMeta);
+      audio.addEventListener("error", onErr);
+      audio.load();
+    });
+  }
+
+  function getSlot(instanceId: string, trackId: string): Promise<AudioSlot> {
+    const existing = slotsRef.current.get(instanceId);
+    if (existing && existing.trackId === trackId) {
+      return Promise.resolve(existing);
+    }
+    const inflight = slotInflightRef.current.get(instanceId);
+    if (inflight) return inflight;
+
+    const task = (async () => {
+      const url = await ensureTrackObjectUrl(trackId);
+      const ctx = ensureAudioCtx();
+      const audio = new Audio(url);
+      audio.preload = "auto";
+      // blob: URLs are same-origin — MediaElementSource stays audible.
+      const source = ctx.createMediaElementSource(audio);
+      const gainNode = ctx.createGain();
+      source.connect(gainNode);
+      gainNode.connect(ctx.destination);
+      await waitForMetadata(audio);
+      const slot: AudioSlot = { audio, source, gainNode, trackId };
+      slotsRef.current.set(instanceId, slot);
+      return slot;
+    })();
+
+    slotInflightRef.current.set(instanceId, task);
+    void task.finally(() => {
+      slotInflightRef.current.delete(instanceId);
+    });
+    return task;
   }
 
   function stopTransport() {
     setPlaying(false);
+    setSoloEndSec(null);
+    setSoloClipId(null);
     if (rafRef.current != null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
@@ -616,20 +677,37 @@ function ArrangeEditor({
       if (seg.kind !== "audio") continue;
       if (at < seg.arrStart || at >= seg.arrEnd) continue;
       active.add(seg.clip.instanceId);
-      const slot = getSlot(seg.clip.instanceId, seg.clip.trackId);
-      slot.gainNode.gain.value = seg.clip.gain;
-      const sourcePos = seg.clip.inSec + (at - seg.arrStart);
-      if (Math.abs(slot.audio.currentTime - sourcePos) > 0.35) {
-        try {
-          slot.audio.currentTime = sourcePos;
-        } catch {
-          // ignore seek until metadata ready
-        }
-      }
-      if (playRef.current && slot.audio.paused) {
-        void ensureAudioCtx().resume();
-        void slot.audio.play().catch(() => undefined);
-      }
+      const clip = seg.clip;
+      const arrStart = seg.arrStart;
+      void getSlot(clip.instanceId, clip.trackId)
+        .then(async (slot) => {
+          if (!playRef.current) return;
+          const still = segsRef.current.some(
+            (s) =>
+              s.kind === "audio" &&
+              s.clip.instanceId === clip.instanceId &&
+              playheadRef.current >= s.arrStart &&
+              playheadRef.current < s.arrEnd,
+          );
+          if (!still) return;
+
+          slot.gainNode.gain.value = clip.gain;
+          const target = clip.inSec + (playheadRef.current - arrStart);
+          if (Math.abs(slot.audio.currentTime - target) > 0.25) {
+            try {
+              slot.audio.currentTime = Math.max(0, target);
+            } catch {
+              // ignore
+            }
+          }
+          if (slot.audio.paused) {
+            await ensureAudioCtx().resume();
+            await slot.audio.play();
+          }
+        })
+        .catch(() => {
+          // decode/network errors surface as silence for this clip
+        });
     }
     for (const [id, slot] of slotsRef.current) {
       if (!active.has(id)) slot.audio.pause();
@@ -640,9 +718,15 @@ function ArrangeEditor({
     return () => {
       for (const slot of slotsRef.current.values()) {
         slot.audio.pause();
-        slot.audio.src = "";
+        slot.audio.removeAttribute("src");
+        slot.audio.load();
       }
       slotsRef.current.clear();
+      slotInflightRef.current.clear();
+      for (const url of objectUrlsRef.current.values()) {
+        URL.revokeObjectURL(url);
+      }
+      objectUrlsRef.current.clear();
       void audioCtxRef.current?.close();
       audioCtxRef.current = null;
     };
@@ -654,7 +738,8 @@ function ArrangeEditor({
     for (const [id, slot] of slotsRef.current) {
       if (!alive.has(id)) {
         slot.audio.pause();
-        slot.audio.src = "";
+        slot.audio.removeAttribute("src");
+        slot.audio.load();
         slotsRef.current.delete(id);
       }
     }
@@ -663,6 +748,21 @@ function ArrangeEditor({
       if (slot) slot.gainNode.gain.value = clip.gain;
     }
   }, [clips]);
+
+  const peakTrackKey = useMemo(
+    () => [...new Set(clips.map((c) => c.trackId))].sort().join(","),
+    [clips],
+  );
+
+  // Warm audio blobs for clips in the arrangement.
+  useEffect(() => {
+    if (!peakTrackKey) return;
+    const ids = peakTrackKey.split(",").filter(Boolean);
+    for (const id of ids) {
+      void ensureTrackObjectUrl(id).catch(() => undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peakTrackKey]);
 
   useEffect(() => {
     if (!playing) {
@@ -680,6 +780,12 @@ function ArrangeEditor({
       const dt = (ts - lastTsRef.current) / 1000;
       lastTsRef.current = ts;
       const next = playheadRef.current + dt;
+      const soloEnd = soloEndRef.current;
+      if (soloEnd != null && next >= soloEnd) {
+        setPlayheadSec(soloEnd);
+        stopTransport();
+        return;
+      }
       const end = totalSecRef.current;
       if (next >= end) {
         setPlayheadSec(end);
@@ -698,11 +804,6 @@ function ArrangeEditor({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing]);
-
-  const peakTrackKey = useMemo(
-    () => [...new Set(clips.map((c) => c.trackId))].sort().join(","),
-    [clips],
-  );
 
   useEffect(() => {
     if (!peakTrackKey) return;
@@ -728,7 +829,12 @@ function ArrangeEditor({
       }
       if (e.key === " " || e.code === "Space") {
         e.preventDefault();
-        setPlaying((p) => !p);
+        if (playing) stopTransport();
+        else {
+          setSoloEndSec(null);
+          setSoloClipId(null);
+          setPlaying(true);
+        }
       }
       if (
         isOwner &&
@@ -742,7 +848,7 @@ function ArrangeEditor({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId, isOwner]);
+  }, [selectedId, isOwner, playing]);
 
   async function onCopyHere() {
     setCopying(true);
@@ -885,6 +991,53 @@ function ArrangeEditor({
     syncAudio(clamped);
   }
 
+  /** Play full arrangement from current playhead (clears solo). */
+  function toggleArrangementPlay() {
+    if (playing) {
+      stopTransport();
+      return;
+    }
+    soloEndRef.current = null;
+    setSoloEndSec(null);
+    setSoloClipId(null);
+    setPlaying(true);
+  }
+
+  /** Audition one clip from selection start (inSec) through outSec, then stop. */
+  function playClipSelection(clip: ArrangementClip) {
+    const seg = segsRef.current.find(
+      (s) => s.kind === "audio" && s.clip.instanceId === clip.instanceId,
+    );
+    if (!seg) return;
+    if (playing && soloClipId === clip.instanceId) {
+      stopTransport();
+      return;
+    }
+    for (const slot of slotsRef.current.values()) slot.audio.pause();
+    soloEndRef.current = seg.arrEnd;
+    setSoloEndSec(seg.arrEnd);
+    setSoloClipId(clip.instanceId);
+    setPlayheadSec(seg.arrStart);
+    playheadRef.current = seg.arrStart;
+    if (!playing) {
+      setPlaying(true);
+    } else {
+      syncAudio(seg.arrStart);
+    }
+    void getSlot(clip.instanceId, clip.trackId)
+      .then(async (slot) => {
+        slot.gainNode.gain.value = clip.gain;
+        try {
+          slot.audio.currentTime = clip.inSec;
+        } catch {
+          // ignore
+        }
+        await ensureAudioCtx().resume();
+        if (playRef.current) await slot.audio.play();
+      })
+      .catch(() => undefined);
+  }
+
   if (!arrangement) {
     return (
       <div className="arr-root">
@@ -928,7 +1081,7 @@ function ArrangeEditor({
         <button
           type="button"
           className="filterButton"
-          onClick={() => setPlaying((p) => !p)}
+          onClick={() => toggleArrangementPlay()}
         >
           {playing ? "stop" : "play"}
         </button>
@@ -1199,6 +1352,23 @@ function ArrangeEditor({
                             ⠿
                           </span>
                           <span className="arr-row-index">{index + 1}</span>
+                          <button
+                            type="button"
+                            className={
+                              playing && soloClipId === clip.instanceId
+                                ? "filterButton filterSelected arr-row-play"
+                                : "filterButton arr-row-play"
+                            }
+                            title="Play this clip from selection start"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              playClipSelection(clip);
+                            }}
+                          >
+                            {playing && soloClipId === clip.instanceId
+                              ? "stop"
+                              : "play"}
+                          </button>
                           {isOwner && (
                             <button
                               type="button"
