@@ -97,6 +97,56 @@ function shortName(filename: string) {
   return filename.replace(/\.aif\.mp3$/i, "").replace(/\.mp3$/i, "");
 }
 
+function sanitizeDownloadName(name: string) {
+  const cleaned = name
+    .trim()
+    .replace(/[/\\?%*:|"<>]/g, "-")
+    .replace(/\s+/g, " ")
+    .slice(0, 80);
+  return cleaned || "arrangement";
+}
+
+function formatExportNumber(n: number) {
+  if (!Number.isFinite(n)) return "0";
+  const rounded = Math.round(n * 1000) / 1000;
+  return String(rounded);
+}
+
+/** TSV cut list: filename, inSec, outSec, pauseSec, gain. */
+function buildArrangementTsv(
+  clips: ArrangementClip[],
+  trackById: Map<string, Track>,
+) {
+  const lines = ["filename\tinSec\toutSec\tpauseSec\tgain"];
+  for (const clip of clips) {
+    const track = trackById.get(clip.trackId);
+    const filename = (track?.filename ?? `missing:${clip.trackId}`).replace(
+      /[\t\r\n]+/g,
+      " ",
+    );
+    lines.push(
+      [
+        filename,
+        formatExportNumber(clip.inSec),
+        formatExportNumber(clip.outSec),
+        formatExportNumber(clip.pauseSec),
+        formatExportNumber(clip.gain),
+      ].join("\t"),
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
+function downloadTextFile(filename: string, body: string, mime: string) {
+  const blob = new Blob([body], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function clipDuration(clip: ArrangementClip) {
   return Math.max(MIN_CLIP_SEC, clip.outSec - clip.inSec);
 }
@@ -1204,6 +1254,22 @@ function ArrangeEditor({
           onClick={() => toggleArrangementPlay()}
         >
           {playing ? "stop" : "play"}
+        </button>
+        <button
+          type="button"
+          className="filterButton"
+          disabled={clips.length === 0}
+          title="Download TSV cut list (filename, in, out, pause, gain)"
+          onClick={() => {
+            const body = buildArrangementTsv(clips, trackById);
+            downloadTextFile(
+              `${sanitizeDownloadName(name)}.tsv`,
+              body,
+              "text/tab-separated-values;charset=utf-8",
+            );
+          }}
+        >
+          export
         </button>
         <button
           type="button"
