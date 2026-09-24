@@ -57,17 +57,20 @@ export const comments = pgTable(
   (t) => [unique("comments_user_track_unique").on(t.userId, t.trackId)],
 );
 
-/** Clip on the arrangement timeline (start / in-point / duration / lane). */
+/**
+ * Ordered arrangement item (sequence, not freeform timeline).
+ * Plays source [inSec, outSec), then silence for pauseSec, at gain (0..2).
+ */
 export type ArrangementClip = {
   instanceId: string;
   trackId: string;
-  startSec: number;
-  offsetSec: number;
-  durationSec: number;
-  lane: number;
+  inSec: number;
+  outSec: number;
+  pauseSec: number;
+  gain: number;
 };
 
-/** Playlist-capable arrangement; clips JSON. */
+/** Playlist-capable arrangement; clips JSON (ordered sequence). */
 export const arrangements = pgTable(
   "arrangements",
   {

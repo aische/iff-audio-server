@@ -27,13 +27,15 @@ export type Track = {
   comments: Comment[];
 };
 
+/** Ordered sequence item: play [inSec, outSec), then pauseSec silence, at gain. */
 export type ArrangementClip = {
   instanceId: string;
   trackId: string;
-  startSec: number;
-  offsetSec: number;
-  durationSec: number;
-  lane: number;
+  inSec: number;
+  outSec: number;
+  pauseSec: number;
+  /** Linear gain 0..2 (1 = unity). */
+  gain: number;
 };
 
 export type ArrangementSummary = {

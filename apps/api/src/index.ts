@@ -322,37 +322,129 @@ app.put<{
 
 const MIN_CLIP_SEC = 0.5;
 
+function clampGain(n: number) {
+  return Math.min(2, Math.max(0, n));
+}
+
+function normalizeClipFields(c: {
+  instanceId: string;
+  trackId: string;
+  inSec: number;
+  outSec: number;
+  pauseSec: number;
+  gain: number;
+}): ArrangementClip {
+  const inSec = Math.max(0, c.inSec);
+  const outSec = Math.max(inSec + MIN_CLIP_SEC, c.outSec);
+  return {
+    instanceId: c.instanceId,
+    trackId: c.trackId,
+    inSec,
+    outSec,
+    pauseSec: Math.max(0, c.pauseSec),
+    gain: clampGain(c.gain),
+  };
+}
+
+/**
+ * Accept new sequence clips, or migrate legacy timeline clips
+ * ({ startSec, offsetSec, durationSec, lane } → ordered in/out).
+ */
 function parseClips(raw: unknown): ArrangementClip[] | null {
   if (!Array.isArray(raw)) return null;
+  if (raw.length === 0) return [];
+
+  const first = raw[0];
+  if (!first || typeof first !== "object") return null;
+  const sample = first as Record<string, unknown>;
+  const isLegacy =
+    typeof sample.offsetSec === "number" &&
+    typeof sample.durationSec === "number" &&
+    typeof sample.inSec !== "number";
+
+  if (isLegacy) {
+    type Legacy = {
+      instanceId: string;
+      trackId: string;
+      startSec: number;
+      offsetSec: number;
+      durationSec: number;
+      lane: number;
+    };
+    const legacy: Legacy[] = [];
+    for (const item of raw) {
+      if (!item || typeof item !== "object") return null;
+      const c = item as Record<string, unknown>;
+      if (typeof c.instanceId !== "string" || !c.instanceId) return null;
+      if (typeof c.trackId !== "string" || !c.trackId) return null;
+      if (typeof c.startSec !== "number" || !Number.isFinite(c.startSec))
+        return null;
+      if (typeof c.offsetSec !== "number" || !Number.isFinite(c.offsetSec))
+        return null;
+      if (typeof c.durationSec !== "number" || !Number.isFinite(c.durationSec))
+        return null;
+      if (typeof c.lane !== "number" || !Number.isFinite(c.lane)) return null;
+      legacy.push({
+        instanceId: c.instanceId,
+        trackId: c.trackId,
+        startSec: c.startSec,
+        offsetSec: c.offsetSec,
+        durationSec: c.durationSec,
+        lane: c.lane,
+      });
+    }
+    legacy.sort(
+      (a, b) => a.startSec - b.startSec || a.lane - b.lane,
+    );
+    return legacy.map((c) =>
+      normalizeClipFields({
+        instanceId: c.instanceId,
+        trackId: c.trackId,
+        inSec: Math.max(0, c.offsetSec),
+        outSec: Math.max(0, c.offsetSec) + Math.max(MIN_CLIP_SEC, c.durationSec),
+        pauseSec: 0,
+        gain: 1,
+      }),
+    );
+  }
+
   const out: ArrangementClip[] = [];
   for (const item of raw) {
     if (!item || typeof item !== "object") return null;
     const c = item as Record<string, unknown>;
     if (typeof c.instanceId !== "string" || !c.instanceId) return null;
     if (typeof c.trackId !== "string" || !c.trackId) return null;
-    if (typeof c.startSec !== "number" || !Number.isFinite(c.startSec))
-      return null;
-    if (typeof c.offsetSec !== "number" || !Number.isFinite(c.offsetSec))
-      return null;
-    if (typeof c.durationSec !== "number" || !Number.isFinite(c.durationSec))
-      return null;
-    if (typeof c.lane !== "number" || !Number.isFinite(c.lane)) return null;
-    out.push({
-      instanceId: c.instanceId,
-      trackId: c.trackId,
-      startSec: Math.max(0, c.startSec),
-      offsetSec: Math.max(0, c.offsetSec),
-      durationSec: Math.max(MIN_CLIP_SEC, c.durationSec),
-      lane: Math.max(0, Math.floor(c.lane)),
-    });
+    if (typeof c.inSec !== "number" || !Number.isFinite(c.inSec)) return null;
+    if (typeof c.outSec !== "number" || !Number.isFinite(c.outSec)) return null;
+    const pauseSec =
+      typeof c.pauseSec === "number" && Number.isFinite(c.pauseSec)
+        ? c.pauseSec
+        : 0;
+    const gain =
+      typeof c.gain === "number" && Number.isFinite(c.gain) ? c.gain : 1;
+    out.push(
+      normalizeClipFields({
+        instanceId: c.instanceId,
+        trackId: c.trackId,
+        inSec: c.inSec,
+        outSec: c.outSec,
+        pauseSec,
+        gain,
+      }),
+    );
   }
   return out;
+}
+
+/** Ensure stored JSON (possibly legacy) is always returned in new shape. */
+function normalizeStoredClips(clips: unknown): ArrangementClip[] {
+  return parseClips(clips) ?? [];
 }
 
 function serializeArrangement(row: {
   id: string;
   name: string;
-  clips: ArrangementClip[];
+  clips: ArrangementClip[] | unknown;
   createdAt: Date;
   updatedAt: Date;
   userId: string;
@@ -361,7 +453,7 @@ function serializeArrangement(row: {
   return {
     id: row.id,
     name: row.name,
-    clips: row.clips,
+    clips: normalizeStoredClips(row.clips),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     userId: row.userId,
@@ -422,7 +514,7 @@ app.get("/arrangements", async (request, reply) => {
   return rows.map((r) => ({
     id: r.id,
     name: r.name,
-    clipCount: r.clips.length,
+    clipCount: normalizeStoredClips(r.clips).length,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
     userId: r.userId,
@@ -481,10 +573,12 @@ app.post<{ Params: { id: string } }>(
     if (!source) return reply.code(404).send({ error: "not found" });
 
     const name = await uniqueCopyName(userId, source.name);
-    const clips: ArrangementClip[] = source.clips.map((c) => ({
-      ...c,
-      instanceId: crypto.randomUUID(),
-    }));
+    const clips: ArrangementClip[] = normalizeStoredClips(source.clips).map(
+      (c) => ({
+        ...c,
+        instanceId: crypto.randomUUID(),
+      }),
+    );
 
     const [row] = await db
       .insert(arrangements)

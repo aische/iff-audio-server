@@ -27,15 +27,34 @@ import {
 
 const AUTOSAVE_MS = 600;
 const MIN_CLIP_SEC = 0.5;
-const LANE_H = 48;
-const RULER_H = 24;
-const PX_PER_SEC_DEFAULT = 12;
-/** ~0.25 px/s ≈ 1 hour across a ~900px timeline pane. */
-const PX_PER_SEC_MIN = 0.25;
-const PX_PER_SEC_MAX = 64;
+const ROW_WAVE_H = 40;
+const EDITOR_WAVE_H = 96;
+const PX_PER_SEC_DEFAULT = 24;
+const PX_PER_SEC_MIN = 2;
+const PX_PER_SEC_MAX = 200;
+const EDITOR_PX_DEFAULT = 40;
+/** Cap canvas backing-store width — huge tracks × zoom × DPR can blank the GPU. */
+const MAX_CANVAS_BACKING_PX = 8192;
+/** Soft cap on editor CSS width before we force-fit zoom. */
+const MAX_EDITOR_CSS_PX = 4096;
 const TRACK_MIME = "application/x-iff-track-id";
+const CLIP_MIME = "application/x-iff-clip-id";
 
 type FilterId = "all" | "commented";
+
+type ScheduleSeg = {
+  clip: ArrangementClip;
+  arrStart: number;
+  arrEnd: number;
+  kind: "audio" | "pause";
+};
+
+type AudioSlot = {
+  audio: HTMLAudioElement;
+  source: MediaElementAudioSourceNode;
+  gainNode: GainNode;
+  trackId: string;
+};
 
 function newInstanceId() {
   return crypto.randomUUID();
@@ -52,17 +71,6 @@ function formatClock(sec: number) {
   return `${m}:${String(r).padStart(2, "0")}`;
 }
 
-/** Major tick step so labels stay ~≥60px apart. */
-function rulerTickSec(pxPerSec: number) {
-  const candidates = [
-    1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200,
-  ];
-  for (const step of candidates) {
-    if (step * pxPerSec >= 60) return step;
-  }
-  return 7200;
-}
-
 function formatPxPerSec(n: number) {
   if (n >= 10) return n.toFixed(0);
   if (n >= 1) return n.toFixed(1);
@@ -73,26 +81,54 @@ function shortName(filename: string) {
   return filename.replace(/\.aif\.mp3$/i, "").replace(/\.mp3$/i, "");
 }
 
-function sourceDuration(track: Track | undefined, clip: ArrangementClip) {
+function clipDuration(clip: ArrangementClip) {
+  return Math.max(MIN_CLIP_SEC, clip.outSec - clip.inSec);
+}
+
+function sourceDuration(track: Track | undefined, peaks: PeaksRecord | null) {
   if (track?.durationSeconds != null && track.durationSeconds > 0) {
     return track.durationSeconds;
   }
-  return Math.max(clip.offsetSec + clip.durationSec, MIN_CLIP_SEC);
+  if (peaks && peaks.durationSec > 0) return peaks.durationSec;
+  return 60;
 }
 
-function timelineEnd(clips: ArrangementClip[]) {
-  // Keep at least one hour of canvas so zoomed-out view has room to work.
-  let end = 3600;
-  for (const c of clips) {
-    end = Math.max(end, c.startSec + c.durationSec + 30);
+function buildSchedule(clips: ArrangementClip[]): {
+  segs: ScheduleSeg[];
+  totalSec: number;
+} {
+  const segs: ScheduleSeg[] = [];
+  let t = 0;
+  for (const clip of clips) {
+    const dur = clipDuration(clip);
+    segs.push({
+      clip,
+      arrStart: t,
+      arrEnd: t + dur,
+      kind: "audio",
+    });
+    t += dur;
+    if (clip.pauseSec > 0) {
+      segs.push({
+        clip,
+        arrStart: t,
+        arrEnd: t + clip.pauseSec,
+        kind: "pause",
+      });
+      t += clip.pauseSec;
+    }
   }
-  return end;
+  return { segs, totalSec: Math.max(t, 0.001) };
 }
 
-function laneCount(clips: ArrangementClip[]) {
-  let max = 0;
-  for (const c of clips) max = Math.max(max, c.lane);
-  return Math.max(3, max + 2);
+function moveItem<T>(arr: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || to < 0 || from >= arr.length || to >= arr.length) {
+    return arr;
+  }
+  const next = [...arr];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item!);
+  return next;
 }
 
 function ClipWaveform({
@@ -102,6 +138,8 @@ function ClipWaveform({
   width,
   height,
   peaksVersion,
+  dimOutside,
+  sourceDurHint,
 }: {
   trackId: string;
   offsetSec: number;
@@ -109,6 +147,9 @@ function ClipWaveform({
   width: number;
   height: number;
   peaksVersion: number;
+  /** When set, draw full source and dim outside [offset, offset+duration]. */
+  dimOutside?: boolean;
+  sourceDurHint?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [rec, setRec] = useState<PeaksRecord | null>(
@@ -137,43 +178,75 @@ function ClipWaveform({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || width < 1 || height < 1) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = Math.max(1, Math.floor(width * dpr));
-    const h = Math.max(1, Math.floor(height * dpr));
+    const cssW = Math.max(1, width);
+    const cssH = Math.max(1, height);
+    let scale = Math.min(window.devicePixelRatio || 1, 2);
+    if (cssW * scale > MAX_CANVAS_BACKING_PX) {
+      scale = MAX_CANVAS_BACKING_PX / cssW;
+    }
+    const w = Math.max(1, Math.floor(cssW * scale));
+    const h = Math.max(1, Math.floor(cssH * scale));
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+
+    const srcDur =
+      rec && rec.durationSec > 0
+        ? rec.durationSec
+        : (sourceDurHint ?? Math.max(offsetSec + durationSec, MIN_CLIP_SEC));
+
     if (!rec) {
-      ctx.clearRect(0, 0, width, height);
+      ctx.clearRect(0, 0, cssW, cssH);
       ctx.strokeStyle = "rgba(255,255,255,0.35)";
       ctx.beginPath();
-      ctx.moveTo(0, height / 2);
-      ctx.lineTo(width, height / 2);
+      ctx.moveTo(0, cssH / 2);
+      ctx.lineTo(cssW, cssH / 2);
       ctx.stroke();
       return;
     }
-    drawClipWaveform(
-      ctx,
-      rec.peaks,
-      rec.durationSec,
-      offsetSec,
-      durationSec,
-      width,
-      height,
-    );
-  }, [rec, offsetSec, durationSec, width, height, peaksVersion]);
 
-  return (
-    <canvas
-      ref={canvasRef}
-      className="arr-clip-wave"
-      width={Math.max(1, Math.floor(width))}
-      height={Math.max(1, Math.floor(height))}
-      aria-hidden
-    />
-  );
+    if (dimOutside) {
+      drawClipWaveform(ctx, rec.peaks, srcDur, 0, srcDur, cssW, cssH);
+      const x0 = (offsetSec / srcDur) * cssW;
+      const x1 = ((offsetSec + durationSec) / srcDur) * cssW;
+      ctx.fillStyle = "rgba(20, 22, 24, 0.55)";
+      ctx.fillRect(0, 0, Math.max(0, x0), cssH);
+      ctx.fillRect(Math.min(cssW, x1), 0, Math.max(0, cssW - x1), cssH);
+      ctx.strokeStyle = "rgba(232, 93, 76, 0.9)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x0 + 0.5, 0);
+      ctx.lineTo(x0 + 0.5, cssH);
+      ctx.moveTo(x1 + 0.5, 0);
+      ctx.lineTo(x1 + 0.5, cssH);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(232, 93, 76, 0.12)";
+      ctx.fillRect(x0, 0, Math.max(0, x1 - x0), cssH);
+    } else {
+      drawClipWaveform(
+        ctx,
+        rec.peaks,
+        srcDur,
+        offsetSec,
+        durationSec,
+        cssW,
+        cssH,
+      );
+    }
+  }, [
+    rec,
+    offsetSec,
+    durationSec,
+    width,
+    height,
+    peaksVersion,
+    dimOutside,
+    sourceDurHint,
+  ]);
+
+  return <canvas ref={canvasRef} className="arr-clip-wave" aria-hidden />;
 }
 
 export function ArrangeShell({
@@ -284,8 +357,7 @@ export function ArrangeShell({
           <p className="arr-muted">Loading…</p>
         ) : list.length === 0 ? (
           <p className="arr-muted">
-            No arrangements yet. Create one, then drag tracks onto the timeline.
-            Full-duration clips on one lane work as a playlist.
+            No arrangements yet. Create one, then drag tracks into the sequence.
           </p>
         ) : (
           <>
@@ -408,88 +480,91 @@ function ArrangeEditor({
   const [arrangement, setArrangement] = useState<Arrangement | null>(null);
   const [clips, setClips] = useState<ArrangementClip[]>([]);
   const [name, setName] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [hoveredTrackId, setHoveredTrackId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterId>("all");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [pxPerSec, setPxPerSec] = useState(PX_PER_SEC_DEFAULT);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  /** Sidebar hover wins over arrangement selection for the comment panel. */
-  const [hoveredTrackId, setHoveredTrackId] = useState<string | null>(null);
-  const [playheadSec, setPlayheadSec] = useState(0);
+  const [editorPxPerSec, setEditorPxPerSec] = useState(EDITOR_PX_DEFAULT);
   const [playing, setPlaying] = useState(false);
+  const [playheadSec, setPlayheadSec] = useState(0);
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const [copying, setCopying] = useState(false);
   const [peaksVersion, setPeaksVersion] = useState(0);
-  const trackById = useMemo(
-    () => new Map(tracks.map((t) => [t.id, t])),
-    [tracks],
-  );
-  const savedClipsRef = useRef<string>("");
-  const savedNameRef = useRef("");
-  const playRef = useRef(playing);
-  const playheadRef = useRef(playheadSec);
+  const [dragClipId, setDragClipId] = useState<string | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+  /** When set, transport stops at this arrangement time (solo clip audition). */
+  const [soloEndSec, setSoloEndSec] = useState<number | null>(null);
+  const [soloClipId, setSoloClipId] = useState<string | null>(null);
+
   const clipsRef = useRef(clips);
+  clipsRef.current = clips;
+  const playRef = useRef(playing);
+  playRef.current = playing;
+  const playheadRef = useRef(playheadSec);
+  playheadRef.current = playheadSec;
+  const soloEndRef = useRef<number | null>(null);
+  soloEndRef.current = soloEndSec;
+
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const slotsRef = useRef<Map<string, AudioSlot>>(new Map());
+  const slotInflightRef = useRef<Map<string, Promise<AudioSlot>>>(new Map());
+  /** Shared blob: URLs so MediaElementSource is same-origin (no CORS silence). */
+  const objectUrlsRef = useRef<Map<string, string>>(new Map());
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
-  const audioRef = useRef(new Map<string, HTMLAudioElement>());
+
+  const trackById = useMemo(() => {
+    const m = new Map<string, Track>();
+    for (const t of tracks) m.set(t.id, t);
+    return m;
+  }, [tracks]);
 
   const isOwner = arrangement?.userId === user.id;
-
-  playRef.current = playing;
-  playheadRef.current = playheadSec;
-  clipsRef.current = clips;
+  const { segs, totalSec } = useMemo(() => buildSchedule(clips), [clips]);
+  const segsRef = useRef(segs);
+  segsRef.current = segs;
+  const totalSecRef = useRef(totalSec);
+  totalSecRef.current = totalSec;
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const row = await api.getArrangement(arrangementId);
         if (cancelled) return;
         setArrangement(row);
         setClips(row.clips);
         setName(row.name);
-        savedClipsRef.current = JSON.stringify(row.clips);
-        savedNameRef.current = row.name;
+        setSelectedId(null);
+        setPlayheadSec(0);
+        setPlaying(false);
+        onError(null);
       } catch (err) {
         if (!cancelled) {
           onError(
             err instanceof Error ? err.message : "Failed to load arrangement",
           );
-          onBack();
         }
       }
     })();
     return () => {
       cancelled = true;
-      stopTransport();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [arrangementId]);
 
   const persist = useEffectEvent(async () => {
-    if (!isOwner) return;
-    const clipsJson = JSON.stringify(clips);
-    const nameTrim = name.trim();
-    if (!nameTrim) return;
-    if (
-      clipsJson === savedClipsRef.current &&
-      nameTrim === savedNameRef.current
-    ) {
-      setSaveState("idle");
-      return;
-    }
+    if (!arrangement || !isOwner) return;
     setSaveState("saving");
     try {
       const patch: { name?: string; clips?: ArrangementClip[] } = {};
-      if (nameTrim !== savedNameRef.current) patch.name = nameTrim;
-      if (clipsJson !== savedClipsRef.current) patch.clips = clips;
+      if (name !== arrangement.name) patch.name = name;
+      patch.clips = clips;
       const updated = await api.updateArrangement(arrangementId, patch);
-      savedClipsRef.current = JSON.stringify(updated.clips);
-      savedNameRef.current = updated.name;
       setArrangement(updated);
       setClips(updated.clips);
-      setName(updated.name);
       setSaveState("saved");
       onError(null);
     } catch (err) {
@@ -508,61 +583,186 @@ function ArrangeEditor({
     return () => window.clearTimeout(t);
   }, [clips, name, arrangement, isOwner, persist]);
 
-  async function onCopyHere() {
-    setCopying(true);
-    try {
-      const row = await api.copyArrangement(arrangementId);
-      onError(null);
-      onOpen(row.id);
-    } catch (err) {
-      onError(err instanceof Error ? err.message : "Failed to copy");
-    } finally {
-      setCopying(false);
+  function ensureAudioCtx() {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new AudioContext();
     }
+    return audioCtxRef.current;
+  }
+
+  async function ensureTrackObjectUrl(trackId: string): Promise<string> {
+    const cached = objectUrlsRef.current.get(trackId);
+    if (cached) return cached;
+    const res = await fetch(trackStreamUrl(trackId), { credentials: "include" });
+    if (!res.ok) {
+      throw new Error(`Failed to load audio (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    objectUrlsRef.current.set(trackId, url);
+    return url;
+  }
+
+  function waitForMetadata(audio: HTMLAudioElement): Promise<void> {
+    if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      const onMeta = () => {
+        cleanup();
+        resolve();
+      };
+      const onErr = () => {
+        cleanup();
+        reject(audio.error ?? new Error("audio load failed"));
+      };
+      const cleanup = () => {
+        audio.removeEventListener("loadedmetadata", onMeta);
+        audio.removeEventListener("error", onErr);
+      };
+      audio.addEventListener("loadedmetadata", onMeta);
+      audio.addEventListener("error", onErr);
+      audio.load();
+    });
+  }
+
+  function getSlot(instanceId: string, trackId: string): Promise<AudioSlot> {
+    const existing = slotsRef.current.get(instanceId);
+    if (existing && existing.trackId === trackId) {
+      return Promise.resolve(existing);
+    }
+    const inflight = slotInflightRef.current.get(instanceId);
+    if (inflight) return inflight;
+
+    const task = (async () => {
+      const url = await ensureTrackObjectUrl(trackId);
+      const ctx = ensureAudioCtx();
+      const audio = new Audio(url);
+      audio.preload = "auto";
+      // blob: URLs are same-origin — MediaElementSource stays audible.
+      const source = ctx.createMediaElementSource(audio);
+      const gainNode = ctx.createGain();
+      source.connect(gainNode);
+      gainNode.connect(ctx.destination);
+      await waitForMetadata(audio);
+      const slot: AudioSlot = { audio, source, gainNode, trackId };
+      slotsRef.current.set(instanceId, slot);
+      return slot;
+    })();
+
+    slotInflightRef.current.set(instanceId, task);
+    void task.finally(() => {
+      slotInflightRef.current.delete(instanceId);
+    });
+    return task;
   }
 
   function stopTransport() {
     setPlaying(false);
+    setSoloEndSec(null);
+    setSoloClipId(null);
     if (rafRef.current != null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
     lastTsRef.current = null;
-    for (const audio of audioRef.current.values()) {
-      audio.pause();
+    for (const slot of slotsRef.current.values()) {
+      slot.audio.pause();
     }
   }
 
   function syncAudio(at: number) {
     const active = new Set<string>();
-    for (const clip of clipsRef.current) {
-      const end = clip.startSec + clip.durationSec;
-      if (at < clip.startSec || at >= end) continue;
-      active.add(clip.instanceId);
-      let audio = audioRef.current.get(clip.instanceId);
-      if (!audio) {
-        audio = new Audio(trackStreamUrl(clip.trackId));
-        audio.preload = "auto";
-        audioRef.current.set(clip.instanceId, audio);
-      }
-      const sourcePos = clip.offsetSec + (at - clip.startSec);
-      if (Math.abs(audio.currentTime - sourcePos) > 0.35) {
-        try {
-          audio.currentTime = sourcePos;
-        } catch {
-          // ignore seek until metadata ready
-        }
-      }
-      if (playRef.current && audio.paused) {
-        void audio.play().catch(() => undefined);
-      }
+    for (const seg of segsRef.current) {
+      if (seg.kind !== "audio") continue;
+      if (at < seg.arrStart || at >= seg.arrEnd) continue;
+      active.add(seg.clip.instanceId);
+      const clip = seg.clip;
+      const arrStart = seg.arrStart;
+      void getSlot(clip.instanceId, clip.trackId)
+        .then(async (slot) => {
+          if (!playRef.current) return;
+          const still = segsRef.current.some(
+            (s) =>
+              s.kind === "audio" &&
+              s.clip.instanceId === clip.instanceId &&
+              playheadRef.current >= s.arrStart &&
+              playheadRef.current < s.arrEnd,
+          );
+          if (!still) return;
+
+          slot.gainNode.gain.value = clip.gain;
+          const target = clip.inSec + (playheadRef.current - arrStart);
+          if (Math.abs(slot.audio.currentTime - target) > 0.25) {
+            try {
+              slot.audio.currentTime = Math.max(0, target);
+            } catch {
+              // ignore
+            }
+          }
+          if (slot.audio.paused) {
+            await ensureAudioCtx().resume();
+            await slot.audio.play();
+          }
+        })
+        .catch(() => {
+          // decode/network errors surface as silence for this clip
+        });
     }
-    for (const [id, audio] of audioRef.current) {
-      if (!active.has(id)) {
-        audio.pause();
-      }
+    for (const [id, slot] of slotsRef.current) {
+      if (!active.has(id)) slot.audio.pause();
     }
   }
+
+  useEffect(() => {
+    return () => {
+      for (const slot of slotsRef.current.values()) {
+        slot.audio.pause();
+        slot.audio.removeAttribute("src");
+        slot.audio.load();
+      }
+      slotsRef.current.clear();
+      slotInflightRef.current.clear();
+      for (const url of objectUrlsRef.current.values()) {
+        URL.revokeObjectURL(url);
+      }
+      objectUrlsRef.current.clear();
+      void audioCtxRef.current?.close();
+      audioCtxRef.current = null;
+    };
+  }, []);
+
+  // Keep gain nodes in sync; drop slots for removed clips.
+  useEffect(() => {
+    const alive = new Set(clips.map((c) => c.instanceId));
+    for (const [id, slot] of slotsRef.current) {
+      if (!alive.has(id)) {
+        slot.audio.pause();
+        slot.audio.removeAttribute("src");
+        slot.audio.load();
+        slotsRef.current.delete(id);
+      }
+    }
+    for (const clip of clips) {
+      const slot = slotsRef.current.get(clip.instanceId);
+      if (slot) slot.gainNode.gain.value = clip.gain;
+    }
+  }, [clips]);
+
+  const peakTrackKey = useMemo(
+    () => [...new Set(clips.map((c) => c.trackId))].sort().join(","),
+    [clips],
+  );
+
+  // Warm audio blobs for clips in the arrangement.
+  useEffect(() => {
+    if (!peakTrackKey) return;
+    const ids = peakTrackKey.split(",").filter(Boolean);
+    for (const id of ids) {
+      void ensureTrackObjectUrl(id).catch(() => undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peakTrackKey]);
 
   useEffect(() => {
     if (!playing) {
@@ -571,7 +771,7 @@ function ArrangeEditor({
         rafRef.current = null;
       }
       lastTsRef.current = null;
-      for (const audio of audioRef.current.values()) audio.pause();
+      for (const slot of slotsRef.current.values()) slot.audio.pause();
       return;
     }
 
@@ -580,7 +780,13 @@ function ArrangeEditor({
       const dt = (ts - lastTsRef.current) / 1000;
       lastTsRef.current = ts;
       const next = playheadRef.current + dt;
-      const end = timelineEnd(clipsRef.current);
+      const soloEnd = soloEndRef.current;
+      if (soloEnd != null && next >= soloEnd) {
+        setPlayheadSec(soloEnd);
+        stopTransport();
+        return;
+      }
+      const end = totalSecRef.current;
       if (next >= end) {
         setPlayheadSec(end);
         stopTransport();
@@ -590,6 +796,7 @@ function ArrangeEditor({
       syncAudio(next);
       rafRef.current = requestAnimationFrame(tick);
     };
+    void ensureAudioCtx().resume();
     syncAudio(playheadRef.current);
     rafRef.current = requestAnimationFrame(tick);
     return () => {
@@ -597,11 +804,6 @@ function ArrangeEditor({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing]);
-
-  const peakTrackKey = useMemo(
-    () => [...new Set(clips.map((c) => c.trackId))].sort().join(","),
-    [clips],
-  );
 
   useEffect(() => {
     if (!peakTrackKey) return;
@@ -619,10 +821,20 @@ function ArrangeEditor({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.target instanceof HTMLInputElement) return;
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
       if (e.key === " " || e.code === "Space") {
         e.preventDefault();
-        setPlaying((p) => !p);
+        if (playing) stopTransport();
+        else {
+          setSoloEndSec(null);
+          setSoloClipId(null);
+          setPlaying(true);
+        }
       }
       if (
         isOwner &&
@@ -636,7 +848,20 @@ function ArrangeEditor({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId, isOwner]);
+  }, [selectedId, isOwner, playing]);
+
+  async function onCopyHere() {
+    setCopying(true);
+    try {
+      const row = await api.copyArrangement(arrangementId);
+      onError(null);
+      onOpen(row.id);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to copy");
+    } finally {
+      setCopying(false);
+    }
+  }
 
   const sidebarTracks = tracks.filter((t) => {
     if (!t.present) return false;
@@ -648,9 +873,6 @@ function ArrangeEditor({
     return true;
   });
 
-  const lanes = laneCount(clips);
-  const totalSec = timelineEnd(clips);
-  const widthPx = Math.max(640, totalSec * pxPerSec);
   const selected = selectedId
     ? (clips.find((c) => c.instanceId === selectedId) ?? null)
     : null;
@@ -658,155 +880,162 @@ function ArrangeEditor({
   const currentTrack = currentTrackId
     ? (trackById.get(currentTrackId) ?? null)
     : null;
-  const tickSec = rulerTickSec(pxPerSec);
-  const rulerMarks: number[] = [];
-  for (let t = 0; t <= totalSec + tickSec; t += tickSec) {
-    rulerMarks.push(t);
-  }
 
-  function addTrackAt(trackId: string, startSec: number, lane: number) {
+  function addTrack(trackId: string, atIndex?: number) {
     const track = trackById.get(trackId);
     if (!track?.present) return;
     const dur =
       track.durationSeconds != null && track.durationSeconds > 0
         ? track.durationSeconds
         : 60;
-    setClips((prev) => [
-      ...prev,
-      {
-        instanceId: newInstanceId(),
-        trackId,
-        startSec: Math.max(0, startSec),
-        offsetSec: 0,
-        durationSec: dur,
-        lane: Math.max(0, lane),
-      },
-    ]);
+    const item: ArrangementClip = {
+      instanceId: newInstanceId(),
+      trackId,
+      inSec: 0,
+      outSec: dur,
+      pauseSec: 0,
+      gain: 1,
+    };
+    setClips((prev) => {
+      if (atIndex == null || atIndex < 0 || atIndex >= prev.length) {
+        return [...prev, item];
+      }
+      const next = [...prev];
+      next.splice(atIndex, 0, item);
+      return next;
+    });
+    setSelectedId(item.instanceId);
+    const fit = MAX_EDITOR_CSS_PX / Math.max(dur, MIN_CLIP_SEC);
+    setEditorPxPerSec(
+      Math.min(EDITOR_PX_DEFAULT, Math.max(PX_PER_SEC_MIN, fit)),
+    );
   }
 
-  function onTimelineDrop(e: React.DragEvent) {
+  function updateClip(
+    id: string,
+    patch: Partial<
+      Pick<ArrangementClip, "inSec" | "outSec" | "pauseSec" | "gain">
+    >,
+  ) {
+    setClips((prev) =>
+      prev.map((c) => {
+        if (c.instanceId !== id) return c;
+        const track = trackById.get(c.trackId);
+        const src = sourceDuration(track, getCachedPeaks(c.trackId) ?? null);
+        let inSec = patch.inSec ?? c.inSec;
+        let outSec = patch.outSec ?? c.outSec;
+        inSec = Math.max(0, Math.min(inSec, src - MIN_CLIP_SEC));
+        outSec = Math.max(inSec + MIN_CLIP_SEC, Math.min(outSec, src));
+        return {
+          ...c,
+          inSec,
+          outSec,
+          pauseSec:
+            patch.pauseSec !== undefined
+              ? Math.max(0, patch.pauseSec)
+              : c.pauseSec,
+          gain:
+            patch.gain !== undefined
+              ? Math.min(2, Math.max(0, patch.gain))
+              : c.gain,
+        };
+      }),
+    );
+  }
+
+  function selectClip(id: string) {
+    setSelectedId(id);
+    const clip = clipsRef.current.find((c) => c.instanceId === id);
+    if (!clip) return;
+    const track = trackById.get(clip.trackId);
+    const src = sourceDuration(track, getCachedPeaks(clip.trackId) ?? null);
+    // Fit full source into a safe editor width so long tracks don't blow the layout.
+    const fit = MAX_EDITOR_CSS_PX / Math.max(src, MIN_CLIP_SEC);
+    setEditorPxPerSec(
+      Math.min(EDITOR_PX_DEFAULT, Math.max(PX_PER_SEC_MIN, fit)),
+    );
+  }
+
+  function clearDrag() {
+    setDragClipId(null);
+    setDropIndex(null);
+  }
+
+  function onSequenceDrop(e: React.DragEvent, insertIndex: number) {
     e.preventDefault();
+    e.stopPropagation();
+    clearDrag();
     if (!isOwner) return;
+    const clipId =
+      e.dataTransfer.getData(CLIP_MIME) ||
+      e.dataTransfer.getData("text/clip-id");
+    if (clipId) {
+      setClips((prev) => {
+        const from = prev.findIndex((c) => c.instanceId === clipId);
+        if (from < 0) return prev;
+        let to = insertIndex;
+        if (from < to) to -= 1;
+        return moveItem(prev, from, Math.max(0, Math.min(prev.length - 1, to)));
+      });
+      return;
+    }
     const trackId =
       e.dataTransfer.getData(TRACK_MIME) ||
       e.dataTransfer.getData("text/plain");
-    if (!trackId) return;
-    const wrap = e.currentTarget as HTMLElement;
-    const rect = wrap.getBoundingClientRect();
-    const x = e.clientX - rect.left + wrap.scrollLeft;
-    const y = e.clientY - rect.top + wrap.scrollTop;
-    const startSec = Math.max(0, x / pxPerSec);
-    const lane = Math.max(
-      0,
-      Math.min(lanes - 1, Math.floor((y - RULER_H) / LANE_H)),
-    );
-    addTrackAt(trackId, startSec, lane);
+    if (trackId) addTrack(trackId, insertIndex);
   }
 
-  type DragKind =
-    | { kind: "move"; id: string; grabOffset: number }
-    | { kind: "trim-left"; id: string; fixedEnd: number; fixedOut: number }
-    | { kind: "trim-right"; id: string; offsetSec: number; sourceDur: number };
+  function seekToArrangement(at: number) {
+    const clamped = Math.max(0, Math.min(totalSec, at));
+    setPlayheadSec(clamped);
+    syncAudio(clamped);
+  }
 
-  const dragRef = useRef<DragKind | null>(null);
-
-  function onClipPointerDown(
-    e: ReactPointerEvent,
-    clip: ArrangementClip,
-    zone: "body" | "left" | "right",
-  ) {
-    if (!isOwner) return;
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setSelectedId(clip.instanceId);
-    const el = e.currentTarget as HTMLElement;
-    const timeline = el.closest(".arr-timeline") as HTMLElement | null;
-    if (!timeline) return;
-    el.setPointerCapture(e.pointerId);
-    const track = trackById.get(clip.trackId);
-    const sourceDur = sourceDuration(track, clip);
-
-    if (zone === "left") {
-      dragRef.current = {
-        kind: "trim-left",
-        id: clip.instanceId,
-        fixedEnd: clip.startSec + clip.durationSec,
-        fixedOut: clip.offsetSec + clip.durationSec,
-      };
-    } else if (zone === "right") {
-      dragRef.current = {
-        kind: "trim-right",
-        id: clip.instanceId,
-        offsetSec: clip.offsetSec,
-        sourceDur,
-      };
-    } else {
-      const rect = timeline.getBoundingClientRect();
-      const x = e.clientX - rect.left + timeline.scrollLeft;
-      dragRef.current = {
-        kind: "move",
-        id: clip.instanceId,
-        grabOffset: x / pxPerSec - clip.startSec,
-      };
+  /** Play full arrangement from current playhead (clears solo). */
+  function toggleArrangementPlay() {
+    if (playing) {
+      stopTransport();
+      return;
     }
+    soloEndRef.current = null;
+    setSoloEndSec(null);
+    setSoloClipId(null);
+    setPlaying(true);
+  }
 
-    const onMove = (ev: PointerEvent) => {
-      const d = dragRef.current;
-      if (!d) return;
-      const rect = timeline.getBoundingClientRect();
-      const x = ev.clientX - rect.left + timeline.scrollLeft;
-      const y = ev.clientY - rect.top + timeline.scrollTop;
-      const at = Math.max(0, x / pxPerSec);
-
-      setClips((prev) =>
-        prev.map((c) => {
-          if (c.instanceId !== d.id) return c;
-          if (d.kind === "move") {
-            const lane = Math.max(
-              0,
-              Math.min(lanes - 1, Math.floor((y - RULER_H) / LANE_H)),
-            );
-            return {
-              ...c,
-              startSec: Math.max(0, at - d.grabOffset),
-              lane,
-            };
-          }
-          if (d.kind === "trim-left") {
-            const src = sourceDuration(trackById.get(c.trackId), c);
-            const maxStart = d.fixedEnd - MIN_CLIP_SEC;
-            const minStart = d.fixedEnd - Math.min(d.fixedOut, src);
-            const startSec = Math.max(minStart, Math.min(maxStart, at));
-            const durationSec = d.fixedEnd - startSec;
-            const offsetSec = d.fixedOut - durationSec;
-            return {
-              ...c,
-              startSec,
-              durationSec,
-              offsetSec: Math.max(0, offsetSec),
-            };
-          }
-          const maxDur = Math.max(MIN_CLIP_SEC, d.sourceDur - d.offsetSec);
-          const durationSec = Math.max(
-            MIN_CLIP_SEC,
-            Math.min(maxDur, at - c.startSec),
-          );
-          return { ...c, durationSec };
-        }),
-      );
-    };
-
-    const onUp = (ev: PointerEvent) => {
-      el.releasePointerCapture(ev.pointerId);
-      dragRef.current = null;
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-    };
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
+  /** Audition one clip from selection start (inSec) through outSec, then stop. */
+  function playClipSelection(clip: ArrangementClip) {
+    const seg = segsRef.current.find(
+      (s) => s.kind === "audio" && s.clip.instanceId === clip.instanceId,
+    );
+    if (!seg) return;
+    if (playing && soloClipId === clip.instanceId) {
+      stopTransport();
+      return;
+    }
+    for (const slot of slotsRef.current.values()) slot.audio.pause();
+    soloEndRef.current = seg.arrEnd;
+    setSoloEndSec(seg.arrEnd);
+    setSoloClipId(clip.instanceId);
+    setPlayheadSec(seg.arrStart);
+    playheadRef.current = seg.arrStart;
+    if (!playing) {
+      setPlaying(true);
+    } else {
+      syncAudio(seg.arrStart);
+    }
+    void getSlot(clip.instanceId, clip.trackId)
+      .then(async (slot) => {
+        slot.gainNode.gain.value = clip.gain;
+        try {
+          slot.audio.currentTime = clip.inSec;
+        } catch {
+          // ignore
+        }
+        await ensureAudioCtx().resume();
+        if (playRef.current) await slot.audio.play();
+      })
+      .catch(() => undefined);
   }
 
   if (!arrangement) {
@@ -852,7 +1081,7 @@ function ArrangeEditor({
         <button
           type="button"
           className="filterButton"
-          onClick={() => setPlaying((p) => !p)}
+          onClick={() => toggleArrangementPlay()}
         >
           {playing ? "stop" : "play"}
         </button>
@@ -860,6 +1089,7 @@ function ArrangeEditor({
           type="button"
           className="filterButton"
           onClick={() => setPxPerSec((p) => Math.max(PX_PER_SEC_MIN, p / 1.25))}
+          title="Zoom out sequence"
         >
           −
         </button>
@@ -867,16 +1097,17 @@ function ArrangeEditor({
           type="button"
           className="filterButton"
           onClick={() => setPxPerSec((p) => Math.min(PX_PER_SEC_MAX, p * 1.25))}
+          title="Zoom in sequence"
         >
           +
         </button>
         <span className="arr-muted">
-          ▶ {formatClock(playheadSec)} · {clips.length} clips ·{" "}
-          {formatPxPerSec(pxPerSec)} px/s
+          ▶ {formatClock(playheadSec)} / {formatClock(totalSec)} ·{" "}
+          {clips.length} clips · {formatPxPerSec(pxPerSec)} px/s
         </span>
         <span className="arr-clip-times" aria-live="polite">
           {selected
-            ? `@ ${formatClock(selected.startSec)} · in ${formatClock(selected.offsetSec)} – out ${formatClock(selected.offsetSec + selected.durationSec)} · ${formatClock(selected.durationSec)}`
+            ? `in ${formatClock(selected.inSec)} – out ${formatClock(selected.outSec)} · ${formatClock(clipDuration(selected))} · pause ${formatClock(selected.pauseSec)} · ×${selected.gain.toFixed(2)}`
             : "no clip selected"}
         </span>
         {isOwner ? (
@@ -902,7 +1133,7 @@ function ArrangeEditor({
         )}
         <span className="arr-hint">
           {isOwner
-            ? "drag tracks → timeline · edges trim · space play · del remove"
+            ? "drag tracks → sequence · reorder rows · select to trim · space play · del remove"
             : "space play · copy to edit"}
         </span>
       </div>
@@ -966,6 +1197,9 @@ function ArrangeEditor({
                     e.dataTransfer.setData("text/plain", t.id);
                     e.dataTransfer.effectAllowed = "copy";
                   }}
+                  onDoubleClick={() => {
+                    if (isOwner) addTrack(t.id);
+                  }}
                   title={t.filename}
                 >
                   <div className="arr-sidebar-item-main">
@@ -1011,110 +1245,490 @@ function ArrangeEditor({
           <div
             className={
               isOwner
-                ? "arr-timeline-wrap"
-                : "arr-timeline-wrap arr-timeline-readonly"
+                ? "arr-sequence-wrap"
+                : "arr-sequence-wrap arr-sequence-readonly"
             }
             onDragOver={(e) => {
               if (isOwner) e.preventDefault();
             }}
-            onDrop={onTimelineDrop}
-            onClick={() => setSelectedId(null)}
+            onDrop={(e) => onSequenceDrop(e, clips.length)}
+            onDragEnd={clearDrag}
           >
-            <div className="arr-timeline" style={{ width: widthPx }}>
-              <div className="arr-ruler" style={{ height: RULER_H }}>
-                {rulerMarks.map((t) => (
-                  <div
-                    key={t}
-                    className="arr-ruler-tick"
-                    style={{ left: t * pxPerSec }}
-                  >
-                    <span className="arr-ruler-label">{formatClock(t)}</span>
-                  </div>
-                ))}
+            {clips.length === 0 ? (
+              <div className="arr-sequence-empty">
+                {isOwner
+                  ? "Drag tracks here (or double-click in the sidebar) to build the sequence."
+                  : "This arrangement has no clips."}
               </div>
+            ) : (
               <div
-                className="arr-playhead"
-                style={{ left: playheadSec * pxPerSec }}
-              />
-              <div className="arr-lanes" style={{ marginTop: RULER_H }}>
-                {Array.from({ length: lanes }, (_, lane) => (
-                  <div
-                    key={lane}
-                    className="arr-lane"
-                    style={{
-                      height: LANE_H,
-                      background: lane % 2 === 0 ? "#1e2124" : "#22262a",
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const wrap = e.currentTarget.closest(".arr-timeline")!;
-                      const rect = wrap.getBoundingClientRect();
-                      const x = e.clientX - rect.left + wrap.scrollLeft;
-                      const at = Math.max(0, x / pxPerSec);
-                      setPlayheadSec(at);
-                      syncAudio(at);
-                    }}
-                  />
-                ))}
-                {clips.map((clip) => {
+                className={
+                  dragClipId
+                    ? "arr-sequence arr-sequence-dragging"
+                    : "arr-sequence"
+                }
+              >
+                {clips.map((clip, index) => {
                   const track = trackById.get(clip.trackId);
                   const isSelected = clip.instanceId === selectedId;
-                  const clipW = Math.max(8, clip.durationSec * pxPerSec);
-                  const clipH = LANE_H - 8;
+                  const dur = clipDuration(clip);
+                  const waveW = Math.max(48, dur * pxPerSec);
+                  const pauseW =
+                    clip.pauseSec > 0
+                      ? Math.max(12, clip.pauseSec * pxPerSec)
+                      : 0;
+                  const audioSeg = segs.find(
+                    (s) =>
+                      s.kind === "audio" &&
+                      s.clip.instanceId === clip.instanceId,
+                  );
+                  const playheadInRow =
+                    audioSeg &&
+                    playheadSec >= audioSeg.arrStart &&
+                    playheadSec < audioSeg.arrEnd;
+
                   return (
-                    <div
-                      key={clip.instanceId}
-                      className={
-                        isSelected ? "arr-clip arr-clip-selected" : "arr-clip"
-                      }
-                      style={{
-                        left: clip.startSec * pxPerSec,
-                        width: clipW,
-                        top: clip.lane * LANE_H + 4,
-                        height: clipH,
-                      }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedId(clip.instanceId);
-                      }}
-                      onPointerDown={(e) => onClipPointerDown(e, clip, "body")}
-                      title={track?.filename ?? clip.trackId}
-                    >
+                    <div key={clip.instanceId} className="arr-row-block">
                       <div
-                        className="arr-clip-handle left"
-                        onPointerDown={(e) =>
-                          onClipPointerDown(e, clip, "left")
+                        className={
+                          dropIndex === index
+                            ? "arr-drop-slot arr-drop-slot-active"
+                            : "arr-drop-slot"
                         }
+                        onDragOver={(e) => {
+                          if (!isOwner) return;
+                          e.preventDefault();
+                          setDropIndex(index);
+                        }}
+                        onDragLeave={() => {
+                          setDropIndex((i) => (i === index ? null : i));
+                        }}
+                        onDrop={(e) => onSequenceDrop(e, index)}
                       />
-                      <div className="arr-clip-body">
-                        <ClipWaveform
-                          trackId={clip.trackId}
-                          offsetSec={clip.offsetSec}
-                          durationSec={clip.durationSec}
-                          width={Math.max(1, clipW - 12)}
-                          height={clipH}
-                          peaksVersion={peaksVersion}
-                        />
-                        <span className="arr-clip-label">
-                          {track ? shortName(track.filename) : "?"}
-                          {clip.offsetSec > 0.05
-                            ? ` @${formatClock(clip.offsetSec)}`
-                            : ""}
-                        </span>
+                      <div
+                        className={[
+                          "arr-row",
+                          isSelected ? "arr-row-selected" : "",
+                          dragClipId === clip.instanceId
+                            ? "arr-row-dragging"
+                            : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                        onClick={() => selectClip(clip.instanceId)}
+                      >
+                        <div className="arr-row-meta">
+                          <span
+                            className="arr-row-handle"
+                            title="Drag to reorder"
+                            draggable={isOwner}
+                            onDragStart={(e) => {
+                              if (!isOwner) {
+                                e.preventDefault();
+                                return;
+                              }
+                              e.dataTransfer.setData(
+                                CLIP_MIME,
+                                clip.instanceId,
+                              );
+                              e.dataTransfer.setData(
+                                "text/clip-id",
+                                clip.instanceId,
+                              );
+                              e.dataTransfer.effectAllowed = "move";
+                              setDragClipId(clip.instanceId);
+                              const label = track
+                                ? shortName(track.filename)
+                                : "clip";
+                              const ghost = document.createElement("div");
+                              ghost.className = "arr-drag-ghost";
+                              ghost.textContent = `${index + 1}. ${label}`;
+                              document.body.appendChild(ghost);
+                              e.dataTransfer.setDragImage(ghost, 16, 16);
+                              window.setTimeout(() => ghost.remove(), 0);
+                            }}
+                            onDragEnd={clearDrag}
+                          >
+                            ⠿
+                          </span>
+                          <span className="arr-row-index">{index + 1}</span>
+                          <button
+                            type="button"
+                            className={
+                              playing && soloClipId === clip.instanceId
+                                ? "filterButton filterSelected arr-row-play"
+                                : "filterButton arr-row-play"
+                            }
+                            title="Play this clip from selection start"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              playClipSelection(clip);
+                            }}
+                          >
+                            {playing && soloClipId === clip.instanceId
+                              ? "stop"
+                              : "play"}
+                          </button>
+                          {isOwner && (
+                            <button
+                              type="button"
+                              className="filterButton arr-row-remove"
+                              title="Remove clip"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setClips((prev) =>
+                                  prev.filter(
+                                    (c) => c.instanceId !== clip.instanceId,
+                                  ),
+                                );
+                                if (selectedId === clip.instanceId) {
+                                  setSelectedId(null);
+                                }
+                              }}
+                            >
+                              ×
+                            </button>
+                          )}
+                          <span
+                            className="arr-row-name"
+                            title={track?.filename ?? clip.trackId}
+                          >
+                            {track ? shortName(track.filename) : "?"}
+                          </span>
+                          <label className="arr-row-field">
+                            pause
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.5}
+                              disabled={!isOwner}
+                              value={clip.pauseSec}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) =>
+                                updateClip(clip.instanceId, {
+                                  pauseSec: Number(e.target.value) || 0,
+                                })
+                              }
+                            />
+                          </label>
+                          <label className="arr-row-field">
+                            gain
+                            <input
+                              type="range"
+                              min={0}
+                              max={2}
+                              step={0.05}
+                              disabled={!isOwner}
+                              value={clip.gain}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) =>
+                                updateClip(clip.instanceId, {
+                                  gain: Number(e.target.value),
+                                })
+                              }
+                            />
+                            <span className="arr-row-gain-val">
+                              ×{clip.gain.toFixed(2)}
+                            </span>
+                          </label>
+                        </div>
+                        <div
+                          className="arr-row-wave-wrap"
+                          style={{ width: waveW + pauseW }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            selectClip(clip.instanceId);
+                            if (!audioSeg) return;
+                            const rect =
+                              e.currentTarget.getBoundingClientRect();
+                            const x = e.clientX - rect.left;
+                            if (x <= waveW) {
+                              seekToArrangement(
+                                audioSeg.arrStart + x / pxPerSec,
+                              );
+                            } else if (clip.pauseSec > 0) {
+                              seekToArrangement(
+                                audioSeg.arrEnd + (x - waveW) / pxPerSec,
+                              );
+                            }
+                          }}
+                        >
+                          <div
+                            className="arr-row-wave"
+                            style={{ width: waveW, height: ROW_WAVE_H }}
+                          >
+                            <ClipWaveform
+                              trackId={clip.trackId}
+                              offsetSec={clip.inSec}
+                              durationSec={dur}
+                              width={waveW}
+                              height={ROW_WAVE_H}
+                              peaksVersion={peaksVersion}
+                            />
+                            {playheadInRow && audioSeg && (
+                              <div
+                                className="arr-row-playhead"
+                                style={{
+                                  left:
+                                    (playheadSec - audioSeg.arrStart) *
+                                    pxPerSec,
+                                }}
+                              />
+                            )}
+                          </div>
+                          {pauseW > 0 && (
+                            <div
+                              className="arr-row-pause"
+                              style={{ width: pauseW, height: ROW_WAVE_H }}
+                              title={`pause ${formatClock(clip.pauseSec)}`}
+                            />
+                          )}
+                        </div>
                       </div>
-                      <div
-                        className="arr-clip-handle right"
-                        onPointerDown={(e) =>
-                          onClipPointerDown(e, clip, "right")
-                        }
-                      />
                     </div>
                   );
                 })}
+                <div
+                  className={
+                    dropIndex === clips.length
+                      ? "arr-drop-slot arr-drop-slot-end arr-drop-slot-active"
+                      : "arr-drop-slot arr-drop-slot-end"
+                  }
+                  onDragOver={(e) => {
+                    if (!isOwner) return;
+                    e.preventDefault();
+                    setDropIndex(clips.length);
+                  }}
+                  onDragLeave={() => {
+                    setDropIndex((i) => (i === clips.length ? null : i));
+                  }}
+                  onDrop={(e) => onSequenceDrop(e, clips.length)}
+                />
               </div>
-            </div>
+            )}
           </div>
+
+          <ClipEditorPanel
+            clip={selected}
+            track={selected ? (trackById.get(selected.trackId) ?? null) : null}
+            isOwner={isOwner}
+            peaksVersion={peaksVersion}
+            editorPxPerSec={editorPxPerSec}
+            onZoom={(fn) => setEditorPxPerSec(fn)}
+            onChange={(patch) => {
+              if (selected) updateClip(selected.instanceId, patch);
+            }}
+          />
+
           <ClipCommentsPanel track={currentTrack} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClipEditorPanel({
+  clip,
+  track,
+  isOwner,
+  peaksVersion,
+  editorPxPerSec,
+  onZoom,
+  onChange,
+}: {
+  clip: ArrangementClip | null;
+  track: Track | null;
+  isOwner: boolean;
+  peaksVersion: number;
+  editorPxPerSec: number;
+  onZoom: (fn: (p: number) => number) => void;
+  onChange: (
+    patch: Partial<Pick<ArrangementClip, "inSec" | "outSec">>,
+  ) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const clipRef = useRef(clip);
+  clipRef.current = clip;
+  const dragRef = useRef<{
+    kind: "in" | "out" | "range";
+    grabOffset?: number;
+    fixedLen?: number;
+  } | null>(null);
+
+  if (!clip || !track) {
+    return (
+      <div className="arr-editor" aria-live="polite">
+        <div className="arr-editor-empty">
+          Select a clip to edit in/out points on the full waveform.
+        </div>
+      </div>
+    );
+  }
+
+  const peaks = getCachedPeaks(clip.trackId) ?? null;
+  const srcDur = sourceDuration(track, peaks);
+  const maxPx = Math.min(
+    PX_PER_SEC_MAX,
+    MAX_EDITOR_CSS_PX / Math.max(srcDur, MIN_CLIP_SEC),
+  );
+  const effectivePx = Math.min(editorPxPerSec, Math.max(PX_PER_SEC_MIN, maxPx));
+  const widthPx = Math.max(320, srcDur * effectivePx);
+  const inX = clip.inSec * effectivePx;
+  const outX = clip.outSec * effectivePx;
+  const selW = Math.max(4, outX - inX);
+
+  function onPointerDown(
+    e: ReactPointerEvent,
+    kind: "in" | "out" | "range",
+  ) {
+    if (!isOwner) return;
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const current = clipRef.current;
+    if (!current) return;
+    const el = e.currentTarget as HTMLElement;
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    el.setPointerCapture(e.pointerId);
+
+    if (kind === "range") {
+      const rect = scroller.getBoundingClientRect();
+      const x = e.clientX - rect.left + scroller.scrollLeft;
+      dragRef.current = {
+        kind: "range",
+        grabOffset: x / effectivePx - current.inSec,
+        fixedLen: current.outSec - current.inSec,
+      };
+    } else {
+      dragRef.current = { kind };
+    }
+
+    const onMove = (ev: PointerEvent) => {
+      const d = dragRef.current;
+      const c = clipRef.current;
+      if (!d || !c) return;
+      const rect = scroller.getBoundingClientRect();
+      const x = ev.clientX - rect.left + scroller.scrollLeft;
+      const at = Math.max(0, Math.min(srcDur, x / effectivePx));
+
+      if (d.kind === "in") {
+        onChange({
+          inSec: Math.min(at, c.outSec - MIN_CLIP_SEC),
+        });
+      } else if (d.kind === "out") {
+        onChange({
+          outSec: Math.max(at, c.inSec + MIN_CLIP_SEC),
+        });
+      } else if (
+        d.kind === "range" &&
+        d.fixedLen != null &&
+        d.grabOffset != null
+      ) {
+        let nextIn = at - d.grabOffset;
+        nextIn = Math.max(0, Math.min(nextIn, srcDur - d.fixedLen));
+        onChange({ inSec: nextIn, outSec: nextIn + d.fixedLen });
+      }
+    };
+
+    const onUp = (ev: PointerEvent) => {
+      el.releasePointerCapture(ev.pointerId);
+      dragRef.current = null;
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+  }
+
+  return (
+    <div className="arr-editor">
+      <div className="arr-editor-header">
+        <span className="arr-editor-title">{shortName(track.filename)}</span>
+        <span className="arr-muted">
+          full {formatClock(srcDur)} · selection{" "}
+          {formatClock(clipDuration(clip))}
+        </span>
+        <label className="arr-row-field">
+          in
+          <input
+            type="number"
+            min={0}
+            step={0.1}
+            disabled={!isOwner}
+            value={Number(clip.inSec.toFixed(2))}
+            onChange={(e) =>
+              onChange({ inSec: Number(e.target.value) || 0 })
+            }
+          />
+        </label>
+        <label className="arr-row-field">
+          out
+          <input
+            type="number"
+            min={0}
+            step={0.1}
+            disabled={!isOwner}
+            value={Number(clip.outSec.toFixed(2))}
+            onChange={(e) =>
+              onChange({ outSec: Number(e.target.value) || 0 })
+            }
+          />
+        </label>
+        <button
+          type="button"
+          className="filterButton"
+          onClick={() =>
+            onZoom((p) => Math.max(PX_PER_SEC_MIN, p / 1.25))
+          }
+        >
+          −
+        </button>
+        <button
+          type="button"
+          className="filterButton"
+          onClick={() =>
+            onZoom((p) => Math.min(maxPx, p * 1.25))
+          }
+        >
+          +
+        </button>
+        <span className="arr-muted">
+          {formatPxPerSec(effectivePx)} px/s
+        </span>
+      </div>
+      <div className="arr-editor-scroll" ref={scrollRef}>
+        <div className="arr-editor-canvas" style={{ width: widthPx }}>
+          <ClipWaveform
+            trackId={clip.trackId}
+            offsetSec={clip.inSec}
+            durationSec={clipDuration(clip)}
+            width={widthPx}
+            height={EDITOR_WAVE_H}
+            peaksVersion={peaksVersion}
+            dimOutside
+            sourceDurHint={srcDur}
+          />
+          <div
+            className={
+              isOwner
+                ? "arr-editor-selection"
+                : "arr-editor-selection arr-editor-selection-ro"
+            }
+            style={{ left: inX, width: selW, height: EDITOR_WAVE_H }}
+            onPointerDown={(e) => onPointerDown(e, "range")}
+          >
+            <div
+              className="arr-editor-handle left"
+              onPointerDown={(e) => onPointerDown(e, "in")}
+            />
+            <div
+              className="arr-editor-handle right"
+              onPointerDown={(e) => onPointerDown(e, "out")}
+            />
+          </div>
         </div>
       </div>
     </div>
