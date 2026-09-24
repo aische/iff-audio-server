@@ -225,10 +225,7 @@ app.get<{ Params: { id: string } }>(
     }
 
     reply.header("Content-Type", "audio/mpeg");
-    reply.header(
-      "Content-Disposition",
-      `inline; filename="${track.filename}"`,
-    );
+    reply.header("Content-Disposition", `inline; filename="${track.filename}"`);
     return reply.send(createReadStream(absPath));
   },
 );
@@ -287,9 +284,7 @@ app.put<{
   if (!body) {
     await db
       .delete(comments)
-      .where(
-        and(eq(comments.trackId, track.id), eq(comments.userId, userId)),
-      );
+      .where(and(eq(comments.trackId, track.id), eq(comments.userId, userId)));
     return reply.code(204).send();
   }
 

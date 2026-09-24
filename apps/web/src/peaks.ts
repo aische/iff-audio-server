@@ -123,7 +123,9 @@ export function loadPeaks(trackId: string): Promise<PeaksRecord> {
       return cached;
     }
 
-    const res = await fetch(trackStreamUrl(trackId), { credentials: "include" });
+    const res = await fetch(trackStreamUrl(trackId), {
+      credentials: "include",
+    });
     if (!res.ok) {
       throw new Error(`Failed to fetch audio for peaks (${res.status})`);
     }
@@ -168,7 +170,12 @@ export function drawClipWaveform(
   ctx.strokeStyle = "rgba(255,255,255,0.55)";
   ctx.lineWidth = 1;
 
-  if (!peaks.length || width < 2 || sourceDurationSec <= 0 || durationSec <= 0) {
+  if (
+    !peaks.length ||
+    width < 2 ||
+    sourceDurationSec <= 0 ||
+    durationSec <= 0
+  ) {
     ctx.beginPath();
     ctx.moveTo(0, mid);
     ctx.lineTo(width, mid);

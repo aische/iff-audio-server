@@ -78,7 +78,10 @@ function usePersistedWidth(
 
     const onMove = (ev: PointerEvent) => {
       setWidth(
-        Math.min(max, Math.max(min, Math.round(startW + (ev.clientX - startX)))),
+        Math.min(
+          max,
+          Math.max(min, Math.round(startW + (ev.clientX - startX))),
+        ),
       );
     };
     const onUp = (ev: PointerEvent) => {
@@ -319,7 +322,9 @@ function PoolView({
 
   return (
     <div className="app">
-      {error && mode === "arrange" && <p className="error arr-error">{error}</p>}
+      {error && mode === "arrange" && (
+        <p className="error arr-error">{error}</p>
+      )}
       {mode === "arrange" ? (
         <ArrangeShell
           tracks={tracks}
@@ -328,170 +333,175 @@ function PoolView({
         />
       ) : (
         <>
-      <div className="audiodiv">
-        {playing ? (
-          <audio
-            key={playing.id}
-            controls
-            autoPlay
-            preload="metadata"
-            src={trackStreamUrl(playing.id)}
-          />
-        ) : (
-          <div className="audio-placeholder" />
-        )}
-      </div>
-
-      <div className="toolbar">
-        <div className="filter-row">
-          {(
-            [
-              ["all", "all"],
-              ["commented", "commented"],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              className={
-                filter === id && !tagFilter
-                  ? "filterButton filterSelected"
-                  : "filterButton"
-              }
-              onClick={() => {
-                setFilter(id);
-                setTagFilter(null);
-              }}
-            >
-              {label}
-            </button>
-          ))}
-          <span className="filter-meta">
-            ({tagFilter ? `#${tagFilter}` : filter}) [{visible.length} tracks]
-          </span>
-          {tagFilter && (
-            <button
-              type="button"
-              className="tagButton"
-              onClick={() => setTagFilter(null)}
-            >
-              clear tag
-            </button>
-          )}
-          <button
-            type="button"
-            className={
-              showOthers ? "filterButton filterSelected" : "filterButton"
-            }
-            onClick={() => setShowOthersPersist(!showOthers)}
-            title="Show other users' comments under each row"
-          >
-            {showOthers ? "others on" : "others off"}
-          </button>
-          <button
-            type="button"
-            className="filterButton"
-            onClick={() => setMode("arrange")}
-          >
-            arrange
-          </button>
-        </div>
-        <div className="toolbar-right">
-          <span className="user-email">{user.email}</span>
-          <button
-            type="button"
-            className="filterButton"
-            onClick={() => setAccountOpen((v) => !v)}
-          >
-            account
-          </button>
-          <button
-            type="button"
-            className="filterButton"
-            onClick={async () => {
-              try {
-                await api.logout();
-                onLogout();
-              } catch (err) {
-                onError(err instanceof Error ? err.message : "Logout failed");
-              }
-            }}
-          >
-            log out
-          </button>
-        </div>
-      </div>
-
-      <div className="content">
-        {accountOpen && (
-          <ChangePasswordPanel
-            onError={onError}
-            onClose={() => setAccountOpen(false)}
-          />
-        )}
-
-        {error && <p className="error">{error}</p>}
-
-        {loading ? (
-          <p className="status-line">Loading tracks…</p>
-        ) : tracks.length === 0 ? (
-          <p className="status-line">
-            No tracks. Sync the library folder into the database.
-          </p>
-        ) : (
-          <div className="trackList" style={colStyle}>
-            <div className="col-header">
-              <div className="trackBox1">
-                <div className="trackDur" aria-hidden="true" />
-                <div className="trackTitle col-label">title</div>
-              </div>
-              <div
-                className="col-resize"
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize title column"
-                aria-valuemin={TITLE_W_MIN}
-                aria-valuemax={TITLE_W_MAX}
-                aria-valuenow={titleCol.width}
-                title="Drag to resize title · double-click to reset"
-                onPointerDown={titleCol.onResizePointerDown}
-                onDoubleClick={titleCol.reset}
+          <div className="audiodiv">
+            {playing ? (
+              <audio
+                key={playing.id}
+                controls
+                autoPlay
+                preload="metadata"
+                src={trackStreamUrl(playing.id)}
               />
-              <div className="trackBox2">
-                <div className="input_box1 col-label">comment</div>
-              </div>
-              <div
-                className="col-resize"
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize comment column"
-                aria-valuemin={COMMENT_W_MIN}
-                aria-valuemax={COMMENT_W_MAX}
-                aria-valuenow={commentCol.width}
-                title="Drag to resize comment · double-click to reset"
-                onPointerDown={commentCol.onResizePointerDown}
-                onDoubleClick={commentCol.reset}
-              />
-            </div>
-            {visible.map((track) => (
-              <TrackRow
-                key={track.id}
-                track={track}
-                user={user}
-                playing={playing?.id === track.id}
-                showOthers={showOthers}
-                tagFilter={tagFilter}
-                onPlay={() => {
-                  if (track.present) setPlaying(track);
-                }}
-                onTagClick={setTagFilter}
-                onCommentsChange={(next) => patchTrackComments(track.id, next)}
-                onError={onError}
-              />
-            ))}
+            ) : (
+              <div className="audio-placeholder" />
+            )}
           </div>
-        )}
-      </div>
+
+          <div className="toolbar">
+            <div className="filter-row">
+              {(
+                [
+                  ["all", "all"],
+                  ["commented", "commented"],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={
+                    filter === id && !tagFilter
+                      ? "filterButton filterSelected"
+                      : "filterButton"
+                  }
+                  onClick={() => {
+                    setFilter(id);
+                    setTagFilter(null);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+              <span className="filter-meta">
+                ({tagFilter ? `#${tagFilter}` : filter}) [{visible.length}{" "}
+                tracks]
+              </span>
+              {tagFilter && (
+                <button
+                  type="button"
+                  className="tagButton"
+                  onClick={() => setTagFilter(null)}
+                >
+                  clear tag
+                </button>
+              )}
+              <button
+                type="button"
+                className={
+                  showOthers ? "filterButton filterSelected" : "filterButton"
+                }
+                onClick={() => setShowOthersPersist(!showOthers)}
+                title="Show other users' comments under each row"
+              >
+                {showOthers ? "others on" : "others off"}
+              </button>
+              <button
+                type="button"
+                className="filterButton"
+                onClick={() => setMode("arrange")}
+              >
+                arrange
+              </button>
+            </div>
+            <div className="toolbar-right">
+              <span className="user-email">{user.email}</span>
+              <button
+                type="button"
+                className="filterButton"
+                onClick={() => setAccountOpen((v) => !v)}
+              >
+                account
+              </button>
+              <button
+                type="button"
+                className="filterButton"
+                onClick={async () => {
+                  try {
+                    await api.logout();
+                    onLogout();
+                  } catch (err) {
+                    onError(
+                      err instanceof Error ? err.message : "Logout failed",
+                    );
+                  }
+                }}
+              >
+                log out
+              </button>
+            </div>
+          </div>
+
+          <div className="content">
+            {accountOpen && (
+              <ChangePasswordPanel
+                onError={onError}
+                onClose={() => setAccountOpen(false)}
+              />
+            )}
+
+            {error && <p className="error">{error}</p>}
+
+            {loading ? (
+              <p className="status-line">Loading tracks…</p>
+            ) : tracks.length === 0 ? (
+              <p className="status-line">
+                No tracks. Sync the library folder into the database.
+              </p>
+            ) : (
+              <div className="trackList" style={colStyle}>
+                <div className="col-header">
+                  <div className="trackBox1">
+                    <div className="trackDur" aria-hidden="true" />
+                    <div className="trackTitle col-label">title</div>
+                  </div>
+                  <div
+                    className="col-resize"
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize title column"
+                    aria-valuemin={TITLE_W_MIN}
+                    aria-valuemax={TITLE_W_MAX}
+                    aria-valuenow={titleCol.width}
+                    title="Drag to resize title · double-click to reset"
+                    onPointerDown={titleCol.onResizePointerDown}
+                    onDoubleClick={titleCol.reset}
+                  />
+                  <div className="trackBox2">
+                    <div className="input_box1 col-label">comment</div>
+                  </div>
+                  <div
+                    className="col-resize"
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize comment column"
+                    aria-valuemin={COMMENT_W_MIN}
+                    aria-valuemax={COMMENT_W_MAX}
+                    aria-valuenow={commentCol.width}
+                    title="Drag to resize comment · double-click to reset"
+                    onPointerDown={commentCol.onResizePointerDown}
+                    onDoubleClick={commentCol.reset}
+                  />
+                </div>
+                {visible.map((track) => (
+                  <TrackRow
+                    key={track.id}
+                    track={track}
+                    user={user}
+                    playing={playing?.id === track.id}
+                    showOthers={showOthers}
+                    tagFilter={tagFilter}
+                    onPlay={() => {
+                      if (track.present) setPlaying(track);
+                    }}
+                    onTagClick={setTagFilter}
+                    onCommentsChange={(next) =>
+                      patchTrackComments(track.id, next)
+                    }
+                    onError={onError}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         </>
       )}
     </div>
@@ -522,9 +532,9 @@ function TrackRow({
   const mine = track.comments.find((c) => c.userId === user.id);
   const others = track.comments.filter((c) => c.userId !== user.id);
   const [draft, setDraft] = useState(mine?.body ?? "");
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">(
-    "idle",
-  );
+  const [saveState, setSaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
   const draftRef = useRef(draft);
   const savedBodyRef = useRef(mine?.body ?? "");
   const seqRef = useRef(0);
@@ -532,7 +542,10 @@ function TrackRow({
   // Keep draft in sync when server comments change externally (e.g. after reload)
   useEffect(() => {
     const body = mine?.body ?? "";
-    if (body !== savedBodyRef.current && draftRef.current === savedBodyRef.current) {
+    if (
+      body !== savedBodyRef.current &&
+      draftRef.current === savedBodyRef.current
+    ) {
       setDraft(body);
       draftRef.current = body;
       savedBodyRef.current = body;

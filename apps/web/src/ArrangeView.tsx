@@ -195,7 +195,9 @@ export function ArrangeShell({
       setList(await api.listArrangements());
       onError(null);
     } catch (err) {
-      onError(err instanceof Error ? err.message : "Failed to load arrangements");
+      onError(
+        err instanceof Error ? err.message : "Failed to load arrangements",
+      );
     } finally {
       setLoading(false);
     }
@@ -328,9 +330,9 @@ function ArrangeEditor({
   const [hoveredTrackId, setHoveredTrackId] = useState<string | null>(null);
   const [playheadSec, setPlayheadSec] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">(
-    "idle",
-  );
+  const [saveState, setSaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
   const [peaksVersion, setPeaksVersion] = useState(0);
   const trackById = useMemo(
     () => new Map(tracks.map((t) => [t.id, t])),
@@ -402,7 +404,9 @@ function ArrangeEditor({
       onError(null);
     } catch (err) {
       setSaveState("error");
-      onError(err instanceof Error ? err.message : "Failed to save arrangement");
+      onError(
+        err instanceof Error ? err.message : "Failed to save arrangement",
+      );
     }
   });
 
@@ -492,8 +496,7 @@ function ArrangeEditor({
   }, [playing]);
 
   const peakTrackKey = useMemo(
-    () =>
-      [...new Set(clips.map((c) => c.trackId))].sort().join(","),
+    () => [...new Set(clips.map((c) => c.trackId))].sort().join(","),
     [clips],
   );
 
@@ -577,7 +580,8 @@ function ArrangeEditor({
   function onTimelineDrop(e: React.DragEvent) {
     e.preventDefault();
     const trackId =
-      e.dataTransfer.getData(TRACK_MIME) || e.dataTransfer.getData("text/plain");
+      e.dataTransfer.getData(TRACK_MIME) ||
+      e.dataTransfer.getData("text/plain");
     if (!trackId) return;
     const wrap = e.currentTarget as HTMLElement;
     const rect = wrap.getBoundingClientRect();
@@ -731,18 +735,14 @@ function ArrangeEditor({
         <button
           type="button"
           className="filterButton"
-          onClick={() =>
-            setPxPerSec((p) => Math.max(PX_PER_SEC_MIN, p / 1.25))
-          }
+          onClick={() => setPxPerSec((p) => Math.max(PX_PER_SEC_MIN, p / 1.25))}
         >
           −
         </button>
         <button
           type="button"
           className="filterButton"
-          onClick={() =>
-            setPxPerSec((p) => Math.min(PX_PER_SEC_MAX, p * 1.25))
-          }
+          onClick={() => setPxPerSec((p) => Math.min(PX_PER_SEC_MAX, p * 1.25))}
         >
           +
         </button>
@@ -840,7 +840,9 @@ function ArrangeEditor({
                         ? formatClock(t.durationSeconds)
                         : "—"}
                     </span>
-                    <span className="arr-sidebar-name">{shortName(t.filename)}</span>
+                    <span className="arr-sidebar-name">
+                      {shortName(t.filename)}
+                    </span>
                   </div>
                   {tags.length > 0 && (
                     <div className="arr-sidebar-tags">
