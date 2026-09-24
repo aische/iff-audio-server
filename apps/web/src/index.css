@@ -2,17 +2,8 @@
   color: #000;
   background: #000;
   font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    Roboto,
-    Oxygen,
-    Ubuntu,
-    Cantarell,
-    "Fira Sans",
-    "Droid Sans",
-    "Helvetica Neue",
-    sans-serif;
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
+    Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -268,6 +259,7 @@ body {
   background: transparent;
   position: relative;
   z-index: 1;
+  background: #999;
 }
 
 .col-resize:hover,
@@ -358,6 +350,10 @@ body {
   border: 1px solid #999;
   background: #fff;
   color: #000;
+}
+
+.input_box1 input::placeholder {
+  color: #ccc;
 }
 
 .save-hint {
@@ -529,6 +525,11 @@ body {
   min-width: 160px;
 }
 
+.arr-name-input:disabled {
+  opacity: 0.85;
+  color: #c4c7cc;
+}
+
 .arr-muted {
   color: #9aa0a6;
 }
@@ -555,6 +556,19 @@ body {
 .arr-list-body {
   padding: 12px;
   max-width: 720px;
+}
+
+.arr-list-section {
+  margin-bottom: 20px;
+}
+
+.arr-list-heading {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: lowercase;
+  color: #9aa0a6;
+  letter-spacing: 0.02em;
 }
 
 .arr-create {
@@ -706,6 +720,14 @@ body {
   overflow: auto;
   background: #1a1c1e;
   overscroll-behavior: contain;
+}
+
+.arr-timeline-readonly .arr-clip {
+  cursor: default;
+}
+
+.arr-timeline-readonly .arr-clip-handle {
+  display: none;
 }
 
 .arr-timeline {

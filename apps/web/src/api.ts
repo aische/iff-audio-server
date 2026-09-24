@@ -42,6 +42,8 @@ export type ArrangementSummary = {
   clipCount: number;
   createdAt: string;
   updatedAt: string;
+  userId: string;
+  userEmail: string;
 };
 
 export type Arrangement = {
@@ -51,6 +53,7 @@ export type Arrangement = {
   createdAt: string;
   updatedAt: string;
   userId: string;
+  userEmail: string;
 };
 
 type ErrorBody = { error?: string };
@@ -151,6 +154,9 @@ export const api = {
     }),
 
   getArrangement: (id: string) => request<Arrangement>(`/arrangements/${id}`),
+
+  copyArrangement: (id: string) =>
+    request<Arrangement>(`/arrangements/${id}/copy`, { method: "POST" }),
 
   updateArrangement: (
     id: string,

@@ -22,7 +22,12 @@ export function assertBasename(filename: string): string {
   if (!name) {
     throw new Error("filename is required");
   }
-  if (name !== path.basename(name) || name.includes("..") || name.includes("/") || name.includes("\\")) {
+  if (
+    name !== path.basename(name) ||
+    name.includes("..") ||
+    name.includes("/") ||
+    name.includes("\\")
+  ) {
     throw new Error("filename must be a basename only");
   }
   return name;
@@ -43,7 +48,9 @@ export type LibraryFile = {
   mtime: Date;
 };
 
-export async function listLibraryMp3s(libraryPath: string): Promise<LibraryFile[]> {
+export async function listLibraryMp3s(
+  libraryPath: string,
+): Promise<LibraryFile[]> {
   await access(libraryPath);
   const entries = await readdir(libraryPath, { withFileTypes: true });
   const files: LibraryFile[] = [];

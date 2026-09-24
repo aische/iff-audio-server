@@ -225,10 +225,7 @@ app.get<{ Params: { id: string } }>(
     }
 
     reply.header("Content-Type", "audio/mpeg");
-    reply.header(
-      "Content-Disposition",
-      `inline; filename="${track.filename}"`,
-    );
+    reply.header("Content-Disposition", `inline; filename="${track.filename}"`);
     return reply.send(createReadStream(absPath));
   },
 );
@@ -287,9 +284,7 @@ app.put<{
   if (!body) {
     await db
       .delete(comments)
-      .where(
-        and(eq(comments.trackId, track.id), eq(comments.userId, userId)),
-      );
+      .where(and(eq(comments.trackId, track.id), eq(comments.userId, userId)));
     return reply.code(204).send();
   }
 
@@ -361,6 +356,7 @@ function serializeArrangement(row: {
   createdAt: Date;
   updatedAt: Date;
   userId: string;
+  userEmail: string;
 }) {
   return {
     id: row.id,
@@ -369,7 +365,40 @@ function serializeArrangement(row: {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     userId: row.userId,
+    userEmail: row.userEmail,
   };
+}
+
+async function arrangementWithOwner(id: string) {
+  const [row] = await db
+    .select({
+      id: arrangements.id,
+      name: arrangements.name,
+      clips: arrangements.clips,
+      createdAt: arrangements.createdAt,
+      updatedAt: arrangements.updatedAt,
+      userId: arrangements.userId,
+      userEmail: users.email,
+    })
+    .from(arrangements)
+    .innerJoin(users, eq(arrangements.userId, users.id))
+    .where(eq(arrangements.id, id))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Pick a name unique for this user, preferring `base (copy)` then numbered. */
+async function uniqueCopyName(userId: string, base: string) {
+  for (let n = 1; n < 1000; n++) {
+    const name = n === 1 ? `${base} (copy)` : `${base} (copy ${n})`;
+    const [existing] = await db
+      .select({ id: arrangements.id })
+      .from(arrangements)
+      .where(and(eq(arrangements.userId, userId), eq(arrangements.name, name)))
+      .limit(1);
+    if (!existing) return name;
+  }
+  return `${base} (copy ${crypto.randomUUID().slice(0, 8)})`;
 }
 
 app.get("/arrangements", async (request, reply) => {
@@ -383,9 +412,11 @@ app.get("/arrangements", async (request, reply) => {
       clips: arrangements.clips,
       createdAt: arrangements.createdAt,
       updatedAt: arrangements.updatedAt,
+      userId: arrangements.userId,
+      userEmail: users.email,
     })
     .from(arrangements)
-    .where(eq(arrangements.userId, userId))
+    .innerJoin(users, eq(arrangements.userId, users.id))
     .orderBy(desc(arrangements.updatedAt));
 
   return rows.map((r) => ({
@@ -394,6 +425,8 @@ app.get("/arrangements", async (request, reply) => {
     clipCount: r.clips.length,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
+    userId: r.userId,
+    userEmail: r.userEmail,
   }));
 });
 
@@ -420,7 +453,8 @@ app.post<{ Body: { name?: string } }>(
       .values({ userId, name, clips: [] })
       .returning();
 
-    return reply.code(201).send(serializeArrangement(row));
+    const withOwner = await arrangementWithOwner(row.id);
+    return reply.code(201).send(serializeArrangement(withOwner!));
   },
 );
 
@@ -430,19 +464,35 @@ app.get<{ Params: { id: string } }>(
     const userId = requireUser(request);
     if (!userId) return reply.code(401).send({ error: "unauthorized" });
 
-    const [row] = await db
-      .select()
-      .from(arrangements)
-      .where(
-        and(
-          eq(arrangements.id, request.params.id),
-          eq(arrangements.userId, userId),
-        ),
-      )
-      .limit(1);
+    const row = await arrangementWithOwner(request.params.id);
     if (!row) return reply.code(404).send({ error: "not found" });
 
     return serializeArrangement(row);
+  },
+);
+
+app.post<{ Params: { id: string } }>(
+  "/arrangements/:id/copy",
+  async (request, reply) => {
+    const userId = requireUser(request);
+    if (!userId) return reply.code(401).send({ error: "unauthorized" });
+
+    const source = await arrangementWithOwner(request.params.id);
+    if (!source) return reply.code(404).send({ error: "not found" });
+
+    const name = await uniqueCopyName(userId, source.name);
+    const clips: ArrangementClip[] = source.clips.map((c) => ({
+      ...c,
+      instanceId: crypto.randomUUID(),
+    }));
+
+    const [row] = await db
+      .insert(arrangements)
+      .values({ userId, name, clips })
+      .returning();
+
+    const withOwner = await arrangementWithOwner(row.id);
+    return reply.code(201).send(serializeArrangement(withOwner!));
   },
 );
 
@@ -509,13 +559,10 @@ app.put<{
     return reply.code(400).send({ error: "name or clips required" });
   }
 
-  const [updated] = await db
-    .update(arrangements)
-    .set(patch)
-    .where(eq(arrangements.id, row.id))
-    .returning();
+  await db.update(arrangements).set(patch).where(eq(arrangements.id, row.id));
 
-  return serializeArrangement(updated);
+  const updated = await arrangementWithOwner(row.id);
+  return serializeArrangement(updated!);
 });
 
 app.delete<{ Params: { id: string } }>(

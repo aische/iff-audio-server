@@ -16,6 +16,7 @@ import {
   type ArrangementSummary,
   type Comment,
   type Track,
+  type User,
 } from "./api";
 import {
   drawClipWaveform,
@@ -176,10 +177,12 @@ function ClipWaveform({
 }
 
 export function ArrangeShell({
+  user,
   tracks,
   onBack,
   onError,
 }: {
+  user: User;
   tracks: Track[];
   onBack: () => void;
   onError: (message: string | null) => void;
@@ -188,6 +191,7 @@ export function ArrangeShell({
   const [loading, setLoading] = useState(true);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
+  const [copyingId, setCopyingId] = useState<string | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -195,7 +199,9 @@ export function ArrangeShell({
       setList(await api.listArrangements());
       onError(null);
     } catch (err) {
-      onError(err instanceof Error ? err.message : "Failed to load arrangements");
+      onError(
+        err instanceof Error ? err.message : "Failed to load arrangements",
+      );
     } finally {
       setLoading(false);
     }
@@ -221,20 +227,38 @@ export function ArrangeShell({
     }
   }
 
+  async function onCopy(id: string) {
+    setCopyingId(id);
+    try {
+      const row = await api.copyArrangement(id);
+      onError(null);
+      setActiveId(row.id);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to copy");
+    } finally {
+      setCopyingId(null);
+    }
+  }
+
   if (activeId) {
     return (
       <ArrangeEditor
         arrangementId={activeId}
+        user={user}
         tracks={tracks}
         onBack={() => {
           setActiveId(null);
           void refresh();
         }}
+        onOpen={setActiveId}
         onCloseAll={onBack}
         onError={onError}
       />
     );
   }
+
+  const mine = list.filter((a) => a.userId === user.id);
+  const others = list.filter((a) => a.userId !== user.id);
 
   return (
     <div className="arr-root">
@@ -264,56 +288,120 @@ export function ArrangeShell({
             Full-duration clips on one lane work as a playlist.
           </p>
         ) : (
-          <ul className="arr-list">
-            {list.map((a) => (
-              <li key={a.id}>
-                <button
-                  type="button"
-                  className="arr-list-open"
-                  onClick={() => setActiveId(a.id)}
-                >
-                  <span className="arr-list-name">{a.name}</span>
-                  <span className="arr-muted">
-                    {a.clipCount} clips ·{" "}
-                    {new Date(a.updatedAt).toLocaleString()}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="filterButton"
-                  onClick={async () => {
-                    if (!confirm(`Delete “${a.name}”?`)) return;
-                    try {
-                      await api.deleteArrangement(a.id);
-                      await refresh();
-                    } catch (err) {
-                      onError(
-                        err instanceof Error ? err.message : "Delete failed",
-                      );
-                    }
-                  }}
-                >
-                  delete
-                </button>
-              </li>
-            ))}
-          </ul>
+          <>
+            <ArrangementListSection
+              title="yours"
+              items={mine}
+              empty="You have no arrangements yet."
+              onOpen={setActiveId}
+              onDelete={async (a) => {
+                if (!confirm(`Delete “${a.name}”?`)) return;
+                try {
+                  await api.deleteArrangement(a.id);
+                  await refresh();
+                } catch (err) {
+                  onError(
+                    err instanceof Error ? err.message : "Delete failed",
+                  );
+                }
+              }}
+            />
+            <ArrangementListSection
+              title="others"
+              items={others}
+              empty="No arrangements from other users yet."
+              showOwner
+              onOpen={setActiveId}
+              onCopy={(a) => void onCopy(a.id)}
+              copyingId={copyingId}
+            />
+          </>
         )}
       </div>
     </div>
   );
 }
 
+function ArrangementListSection({
+  title,
+  items,
+  empty,
+  showOwner,
+  onOpen,
+  onDelete,
+  onCopy,
+  copyingId,
+}: {
+  title: string;
+  items: ArrangementSummary[];
+  empty: string;
+  showOwner?: boolean;
+  onOpen: (id: string) => void;
+  onDelete?: (a: ArrangementSummary) => void | Promise<void>;
+  onCopy?: (a: ArrangementSummary) => void;
+  copyingId?: string | null;
+}) {
+  return (
+    <section className="arr-list-section">
+      <h2 className="arr-list-heading">{title}</h2>
+      {items.length === 0 ? (
+        <p className="arr-muted">{empty}</p>
+      ) : (
+        <ul className="arr-list">
+          {items.map((a) => (
+            <li key={a.id}>
+              <button
+                type="button"
+                className="arr-list-open"
+                onClick={() => onOpen(a.id)}
+              >
+                <span className="arr-list-name">{a.name}</span>
+                <span className="arr-muted">
+                  {showOwner ? `${a.userEmail} · ` : ""}
+                  {a.clipCount} clips · {new Date(a.updatedAt).toLocaleString()}
+                </span>
+              </button>
+              {onCopy && (
+                <button
+                  type="button"
+                  className="filterButton"
+                  disabled={copyingId === a.id}
+                  onClick={() => onCopy(a)}
+                >
+                  {copyingId === a.id ? "copying…" : "copy"}
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  type="button"
+                  className="filterButton"
+                  onClick={() => void onDelete(a)}
+                >
+                  delete
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function ArrangeEditor({
   arrangementId,
+  user,
   tracks,
   onBack,
+  onOpen,
   onCloseAll,
   onError,
 }: {
   arrangementId: string;
+  user: User;
   tracks: Track[];
   onBack: () => void;
+  onOpen: (id: string) => void;
   onCloseAll: () => void;
   onError: (message: string | null) => void;
 }) {
@@ -328,9 +416,10 @@ function ArrangeEditor({
   const [hoveredTrackId, setHoveredTrackId] = useState<string | null>(null);
   const [playheadSec, setPlayheadSec] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">(
-    "idle",
-  );
+  const [saveState, setSaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const [copying, setCopying] = useState(false);
   const [peaksVersion, setPeaksVersion] = useState(0);
   const trackById = useMemo(
     () => new Map(tracks.map((t) => [t.id, t])),
@@ -344,6 +433,8 @@ function ArrangeEditor({
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
   const audioRef = useRef(new Map<string, HTMLAudioElement>());
+
+  const isOwner = arrangement?.userId === user.id;
 
   playRef.current = playing;
   playheadRef.current = playheadSec;
@@ -377,6 +468,7 @@ function ArrangeEditor({
   }, [arrangementId]);
 
   const persist = useEffectEvent(async () => {
+    if (!isOwner) return;
     const clipsJson = JSON.stringify(clips);
     const nameTrim = name.trim();
     if (!nameTrim) return;
@@ -402,17 +494,32 @@ function ArrangeEditor({
       onError(null);
     } catch (err) {
       setSaveState("error");
-      onError(err instanceof Error ? err.message : "Failed to save arrangement");
+      onError(
+        err instanceof Error ? err.message : "Failed to save arrangement",
+      );
     }
   });
 
   useEffect(() => {
-    if (!arrangement) return;
+    if (!arrangement || !isOwner) return;
     const t = window.setTimeout(() => {
       void persist();
     }, AUTOSAVE_MS);
     return () => window.clearTimeout(t);
-  }, [clips, name, arrangement, persist]);
+  }, [clips, name, arrangement, isOwner, persist]);
+
+  async function onCopyHere() {
+    setCopying(true);
+    try {
+      const row = await api.copyArrangement(arrangementId);
+      onError(null);
+      onOpen(row.id);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to copy");
+    } finally {
+      setCopying(false);
+    }
+  }
 
   function stopTransport() {
     setPlaying(false);
@@ -492,8 +599,7 @@ function ArrangeEditor({
   }, [playing]);
 
   const peakTrackKey = useMemo(
-    () =>
-      [...new Set(clips.map((c) => c.trackId))].sort().join(","),
+    () => [...new Set(clips.map((c) => c.trackId))].sort().join(","),
     [clips],
   );
 
@@ -518,7 +624,11 @@ function ArrangeEditor({
         e.preventDefault();
         setPlaying((p) => !p);
       }
-      if ((e.key === "Backspace" || e.key === "Delete") && selectedId) {
+      if (
+        isOwner &&
+        (e.key === "Backspace" || e.key === "Delete") &&
+        selectedId
+      ) {
         e.preventDefault();
         setClips((prev) => prev.filter((c) => c.instanceId !== selectedId));
         setSelectedId(null);
@@ -526,7 +636,7 @@ function ArrangeEditor({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId]);
+  }, [selectedId, isOwner]);
 
   const sidebarTracks = tracks.filter((t) => {
     if (!t.present) return false;
@@ -576,8 +686,10 @@ function ArrangeEditor({
 
   function onTimelineDrop(e: React.DragEvent) {
     e.preventDefault();
+    if (!isOwner) return;
     const trackId =
-      e.dataTransfer.getData(TRACK_MIME) || e.dataTransfer.getData("text/plain");
+      e.dataTransfer.getData(TRACK_MIME) ||
+      e.dataTransfer.getData("text/plain");
     if (!trackId) return;
     const wrap = e.currentTarget as HTMLElement;
     const rect = wrap.getBoundingClientRect();
@@ -603,6 +715,7 @@ function ArrangeEditor({
     clip: ArrangementClip,
     zone: "body" | "left" | "right",
   ) {
+    if (!isOwner) return;
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
@@ -720,7 +833,22 @@ function ArrangeEditor({
           value={name}
           onChange={(e) => setName(e.target.value)}
           aria-label="Arrangement name"
+          readOnly={!isOwner}
+          disabled={!isOwner}
         />
+        {!isOwner && (
+          <span className="arr-muted">by {arrangement.userEmail}</span>
+        )}
+        {!isOwner && (
+          <button
+            type="button"
+            className="filterButton"
+            disabled={copying}
+            onClick={() => void onCopyHere()}
+          >
+            {copying ? "copying…" : "copy to mine"}
+          </button>
+        )}
         <button
           type="button"
           className="filterButton"
@@ -731,18 +859,14 @@ function ArrangeEditor({
         <button
           type="button"
           className="filterButton"
-          onClick={() =>
-            setPxPerSec((p) => Math.max(PX_PER_SEC_MIN, p / 1.25))
-          }
+          onClick={() => setPxPerSec((p) => Math.max(PX_PER_SEC_MIN, p / 1.25))}
         >
           −
         </button>
         <button
           type="button"
           className="filterButton"
-          onClick={() =>
-            setPxPerSec((p) => Math.min(PX_PER_SEC_MAX, p * 1.25))
-          }
+          onClick={() => setPxPerSec((p) => Math.min(PX_PER_SEC_MAX, p * 1.25))}
         >
           +
         </button>
@@ -755,25 +879,31 @@ function ArrangeEditor({
             ? `@ ${formatClock(selected.startSec)} · in ${formatClock(selected.offsetSec)} – out ${formatClock(selected.offsetSec + selected.durationSec)} · ${formatClock(selected.durationSec)}`
             : "no clip selected"}
         </span>
-        <span
-          className={[
-            "arr-save",
-            saveState === "error" ? "save-error" : "",
-            saveState === "saved" ? "save-ok" : "",
-          ]
-            .filter(Boolean)
-            .join(" ")}
-        >
-          {saveState === "saving"
-            ? "saving…"
-            : saveState === "saved"
-              ? "saved"
-              : saveState === "error"
-                ? "save failed"
-                : ""}
-        </span>
+        {isOwner ? (
+          <span
+            className={[
+              "arr-save",
+              saveState === "error" ? "save-error" : "",
+              saveState === "saved" ? "save-ok" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          >
+            {saveState === "saving"
+              ? "saving…"
+              : saveState === "saved"
+                ? "saved"
+                : saveState === "error"
+                  ? "save failed"
+                  : ""}
+          </span>
+        ) : (
+          <span className="arr-save">read-only</span>
+        )}
         <span className="arr-hint">
-          drag tracks → timeline · edges trim · space play · del remove
+          {isOwner
+            ? "drag tracks → timeline · edges trim · space play · del remove"
+            : "space play · copy to edit"}
         </span>
       </div>
 
@@ -824,10 +954,14 @@ function ArrangeEditor({
                       ? "arr-sidebar-item arr-sidebar-item-current"
                       : "arr-sidebar-item"
                   }
-                  draggable
+                  draggable={isOwner}
                   onMouseEnter={() => setHoveredTrackId(t.id)}
                   onMouseLeave={() => setHoveredTrackId(null)}
                   onDragStart={(e) => {
+                    if (!isOwner) {
+                      e.preventDefault();
+                      return;
+                    }
                     e.dataTransfer.setData(TRACK_MIME, t.id);
                     e.dataTransfer.setData("text/plain", t.id);
                     e.dataTransfer.effectAllowed = "copy";
@@ -840,7 +974,9 @@ function ArrangeEditor({
                         ? formatClock(t.durationSeconds)
                         : "—"}
                     </span>
-                    <span className="arr-sidebar-name">{shortName(t.filename)}</span>
+                    <span className="arr-sidebar-name">
+                      {shortName(t.filename)}
+                    </span>
                   </div>
                   {tags.length > 0 && (
                     <div className="arr-sidebar-tags">
@@ -873,8 +1009,14 @@ function ArrangeEditor({
 
         <div className="arr-main">
           <div
-            className="arr-timeline-wrap"
-            onDragOver={(e) => e.preventDefault()}
+            className={
+              isOwner
+                ? "arr-timeline-wrap"
+                : "arr-timeline-wrap arr-timeline-readonly"
+            }
+            onDragOver={(e) => {
+              if (isOwner) e.preventDefault();
+            }}
             onDrop={onTimelineDrop}
             onClick={() => setSelectedId(null)}
           >

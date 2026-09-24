@@ -103,10 +103,7 @@ if (oldOnDisk) {
   );
 }
 if (!newOnDisk) {
-  console.warn(
-    "Warning: new file not found on disk — place it at:",
-    newPath,
-  );
+  console.warn("Warning: new file not found on disk — place it at:", newPath);
 }
 
 const [updated] = await db
