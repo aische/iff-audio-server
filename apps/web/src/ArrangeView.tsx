@@ -54,12 +54,23 @@ type ScheduleSeg = {
   kind: "audio" | "pause";
 };
 
-type AudioSlot = {
-  audio: HTMLAudioElement;
-  source: MediaElementAudioSourceNode;
-  gainNode: GainNode;
+/** One scheduled BufferSource for a clip instance while the transport is playing. */
+type ActiveVoice = {
+  instanceId: string;
   trackId: string;
+  source: AudioBufferSourceNode;
+  gainNode: GainNode;
+  /** audioCtx.currentTime when source.start ran */
+  ctxStart: number;
+  /** Offset into the AudioBuffer at ctxStart */
+  bufferOffset: number;
 };
+
+/** Restart a voice only after an explicit seek (not rAF vs audio clock drift). */
+const SEEK_JUMP_SEC = 0.3;
+
+const trackBuffers = new Map<string, AudioBuffer>();
+const trackBufferInflight = new Map<string, Promise<AudioBuffer>>();
 
 function newInstanceId() {
   return crypto.randomUUID();
@@ -198,9 +209,11 @@ function ClipWaveform({
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
 
     const srcDur =
-      rec && rec.durationSec > 0
-        ? rec.durationSec
-        : (sourceDurHint ?? Math.max(offsetSec + durationSec, MIN_CLIP_SEC));
+      sourceDurHint != null && sourceDurHint > 0
+        ? sourceDurHint
+        : rec && rec.durationSec > 0
+          ? rec.durationSec
+          : Math.max(offsetSec + durationSec, MIN_CLIP_SEC);
 
     if (!rec) {
       ctx.clearRect(0, 0, cssW, cssH);
@@ -219,14 +232,6 @@ function ClipWaveform({
       ctx.fillStyle = "rgba(20, 22, 24, 0.55)";
       ctx.fillRect(0, 0, Math.max(0, x0), cssH);
       ctx.fillRect(Math.min(cssW, x1), 0, Math.max(0, cssW - x1), cssH);
-      ctx.strokeStyle = "rgba(232, 93, 76, 0.9)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x0 + 0.5, 0);
-      ctx.lineTo(x0 + 0.5, cssH);
-      ctx.moveTo(x1 + 0.5, 0);
-      ctx.lineTo(x1 + 0.5, cssH);
-      ctx.stroke();
       ctx.fillStyle = "rgba(232, 93, 76, 0.12)";
       ctx.fillRect(x0, 0, Math.max(0, x1 - x0), cssH);
     } else {
@@ -516,12 +521,15 @@ function ArrangeEditor({
   const saveSeqRef = useRef(0);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const slotsRef = useRef<Map<string, AudioSlot>>(new Map());
-  const slotInflightRef = useRef<Map<string, Promise<AudioSlot>>>(new Map());
-  /** Shared blob: URLs so MediaElementSource is same-origin (no CORS silence). */
-  const objectUrlsRef = useRef<Map<string, string>>(new Map());
+  const voicesRef = useRef<Map<string, ActiveVoice>>(new Map());
+  /** Bumps when a clip's voice should be abandoned (seek / stop / superseded start). */
+  const voiceGenRef = useRef<Map<string, number>>(new Map());
+  /** Clip instances with a buffer decode / voice start already in flight. */
+  const voiceStartPendingRef = useRef<Set<string>>(new Set());
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
+  /** Previous sync playhead — large jumps mean the user seeked. */
+  const lastSyncAtRef = useRef(0);
 
   const trackById = useMemo(() => {
     const m = new Map<string, Track>();
@@ -645,71 +653,66 @@ function ArrangeEditor({
     return audioCtxRef.current;
   }
 
-  async function ensureTrackObjectUrl(trackId: string): Promise<string> {
-    const cached = objectUrlsRef.current.get(trackId);
-    if (cached) return cached;
-    const res = await fetch(trackStreamUrl(trackId), { credentials: "include" });
-    if (!res.ok) {
-      throw new Error(`Failed to load audio (${res.status})`);
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    objectUrlsRef.current.set(trackId, url);
-    return url;
-  }
-
-  function waitForMetadata(audio: HTMLAudioElement): Promise<void> {
-    if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      return Promise.resolve();
-    }
-    return new Promise((resolve, reject) => {
-      const onMeta = () => {
-        cleanup();
-        resolve();
-      };
-      const onErr = () => {
-        cleanup();
-        reject(audio.error ?? new Error("audio load failed"));
-      };
-      const cleanup = () => {
-        audio.removeEventListener("loadedmetadata", onMeta);
-        audio.removeEventListener("error", onErr);
-      };
-      audio.addEventListener("loadedmetadata", onMeta);
-      audio.addEventListener("error", onErr);
-      audio.load();
-    });
-  }
-
-  function getSlot(instanceId: string, trackId: string): Promise<AudioSlot> {
-    const existing = slotsRef.current.get(instanceId);
-    if (existing && existing.trackId === trackId) {
-      return Promise.resolve(existing);
-    }
-    const inflight = slotInflightRef.current.get(instanceId);
-    if (inflight) return inflight;
+  function ensureTrackBuffer(trackId: string): Promise<AudioBuffer> {
+    const cached = trackBuffers.get(trackId);
+    if (cached) return Promise.resolve(cached);
+    const pending = trackBufferInflight.get(trackId);
+    if (pending) return pending;
 
     const task = (async () => {
-      const url = await ensureTrackObjectUrl(trackId);
+      const res = await fetch(trackStreamUrl(trackId), {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to load audio (${res.status})`);
+      }
+      const raw = await res.arrayBuffer();
       const ctx = ensureAudioCtx();
-      const audio = new Audio(url);
-      audio.preload = "auto";
-      // blob: URLs are same-origin — MediaElementSource stays audible.
-      const source = ctx.createMediaElementSource(audio);
-      const gainNode = ctx.createGain();
-      source.connect(gainNode);
-      gainNode.connect(ctx.destination);
-      await waitForMetadata(audio);
-      const slot: AudioSlot = { audio, source, gainNode, trackId };
-      slotsRef.current.set(instanceId, slot);
-      return slot;
+      const buffer = await ctx.decodeAudioData(raw.slice(0));
+      trackBuffers.set(trackId, buffer);
+      return buffer;
     })();
 
-    slotInflightRef.current.set(instanceId, task);
-    void task.finally(() => {
-      slotInflightRef.current.delete(instanceId);
+    trackBufferInflight.set(trackId, task);
+    return task.finally(() => {
+      trackBufferInflight.delete(trackId);
     });
-    return task;
+  }
+
+  function stopVoice(voice: ActiveVoice) {
+    try {
+      voice.source.onended = null;
+      voice.source.stop();
+    } catch {
+      // already stopped
+    }
+    try {
+      voice.source.disconnect();
+    } catch {
+      // ignore
+    }
+    try {
+      voice.gainNode.disconnect();
+    } catch {
+      // ignore
+    }
+  }
+
+  function stopAllVoices() {
+    for (const voice of voicesRef.current.values()) stopVoice(voice);
+    voicesRef.current.clear();
+    voiceStartPendingRef.current.clear();
+    for (const id of voiceGenRef.current.keys()) {
+      voiceGenRef.current.set(id, (voiceGenRef.current.get(id) ?? 0) + 1);
+    }
+  }
+
+  function bumpVoiceGen(instanceId: string) {
+    voiceGenRef.current.set(
+      instanceId,
+      (voiceGenRef.current.get(instanceId) ?? 0) + 1,
+    );
+    voiceStartPendingRef.current.delete(instanceId);
   }
 
   function stopTransport() {
@@ -721,86 +724,160 @@ function ArrangeEditor({
       rafRef.current = null;
     }
     lastTsRef.current = null;
-    for (const slot of slotsRef.current.values()) {
-      slot.audio.pause();
-    }
+    stopAllVoices();
   }
 
   function syncAudio(at: number) {
+    if (!playRef.current) {
+      stopAllVoices();
+      return;
+    }
+
+    const ctx = ensureAudioCtx();
+    const seeked = Math.abs(at - lastSyncAtRef.current) > SEEK_JUMP_SEC;
+    lastSyncAtRef.current = at;
     const active = new Set<string>();
+
     for (const seg of segsRef.current) {
       if (seg.kind !== "audio") continue;
       if (at < seg.arrStart || at >= seg.arrEnd) continue;
-      active.add(seg.clip.instanceId);
+
       const clip = seg.clip;
-      const arrStart = seg.arrStart;
-      void getSlot(clip.instanceId, clip.trackId)
-        .then(async (slot) => {
+      active.add(clip.instanceId);
+
+      const remaining = seg.arrEnd - at;
+      if (remaining <= 0.001) continue;
+
+      const existing = voicesRef.current.get(clip.instanceId);
+      if (existing && existing.trackId === clip.trackId && !seeked) {
+        existing.gainNode.gain.value = clip.gain;
+        continue;
+      }
+      if (existing) {
+        bumpVoiceGen(clip.instanceId);
+        stopVoice(existing);
+        voicesRef.current.delete(clip.instanceId);
+      }
+
+      // Decode / start already in flight for this clip — wait for it.
+      if (voiceStartPendingRef.current.has(clip.instanceId)) {
+        // Seek while loading: drop the stale start and kick a new one.
+        if (!seeked) continue;
+        bumpVoiceGen(clip.instanceId);
+      }
+
+      const gen = (voiceGenRef.current.get(clip.instanceId) ?? 0) + 1;
+      voiceGenRef.current.set(clip.instanceId, gen);
+      voiceStartPendingRef.current.add(clip.instanceId);
+
+      void ensureTrackBuffer(clip.trackId)
+        .then(async (buffer) => {
+          if (voiceGenRef.current.get(clip.instanceId) !== gen) return;
           if (!playRef.current) return;
-          const still = segsRef.current.some(
+
+          await ctx.resume();
+          if (voiceGenRef.current.get(clip.instanceId) !== gen) return;
+          if (!playRef.current) return;
+
+          const nowAt = playheadRef.current;
+          const still = segsRef.current.find(
             (s) =>
               s.kind === "audio" &&
               s.clip.instanceId === clip.instanceId &&
-              playheadRef.current >= s.arrStart &&
-              playheadRef.current < s.arrEnd,
+              nowAt >= s.arrStart &&
+              nowAt < s.arrEnd,
           );
           if (!still) return;
 
-          slot.gainNode.gain.value = clip.gain;
-          const target = clip.inSec + (playheadRef.current - arrStart);
-          if (Math.abs(slot.audio.currentTime - target) > 0.25) {
-            try {
-              slot.audio.currentTime = Math.max(0, target);
-            } catch {
-              // ignore
+          const prev = voicesRef.current.get(clip.instanceId);
+          if (prev) {
+            stopVoice(prev);
+            voicesRef.current.delete(clip.instanceId);
+          }
+
+          const offset = Math.max(
+            0,
+            Math.min(
+              still.clip.inSec + (nowAt - still.arrStart),
+              Math.max(0, buffer.duration - 0.001),
+            ),
+          );
+          const dur = Math.min(
+            still.arrEnd - nowAt,
+            Math.max(0, buffer.duration - offset),
+          );
+          if (dur <= 0.001) return;
+
+          const gainNode = ctx.createGain();
+          gainNode.gain.value = still.clip.gain;
+          gainNode.connect(ctx.destination);
+
+          const source = ctx.createBufferSource();
+          source.buffer = buffer;
+          source.connect(gainNode);
+          const ctxStart = ctx.currentTime;
+          source.onended = () => {
+            const cur = voicesRef.current.get(clip.instanceId);
+            if (cur?.source === source) {
+              voicesRef.current.delete(clip.instanceId);
             }
-          }
-          if (slot.audio.paused) {
-            await ensureAudioCtx().resume();
-            await slot.audio.play();
-          }
+          };
+          source.start(ctxStart, offset, dur);
+          voicesRef.current.set(clip.instanceId, {
+            instanceId: clip.instanceId,
+            trackId: clip.trackId,
+            source,
+            gainNode,
+            ctxStart,
+            bufferOffset: offset,
+          });
         })
-        .catch(() => {
-          // decode/network errors surface as silence for this clip
+        .catch((err) => {
+          if (voiceGenRef.current.get(clip.instanceId) !== gen) return;
+          onError(
+            err instanceof Error ? err.message : "Failed to decode audio",
+          );
+        })
+        .finally(() => {
+          if (voiceGenRef.current.get(clip.instanceId) === gen) {
+            voiceStartPendingRef.current.delete(clip.instanceId);
+          }
         });
     }
-    for (const [id, slot] of slotsRef.current) {
-      if (!active.has(id)) slot.audio.pause();
+
+    for (const [id, voice] of voicesRef.current) {
+      if (!active.has(id)) {
+        bumpVoiceGen(id);
+        stopVoice(voice);
+        voicesRef.current.delete(id);
+      }
+    }
+    for (const id of [...voiceStartPendingRef.current]) {
+      if (!active.has(id)) bumpVoiceGen(id);
     }
   }
 
   useEffect(() => {
     return () => {
-      for (const slot of slotsRef.current.values()) {
-        slot.audio.pause();
-        slot.audio.removeAttribute("src");
-        slot.audio.load();
-      }
-      slotsRef.current.clear();
-      slotInflightRef.current.clear();
-      for (const url of objectUrlsRef.current.values()) {
-        URL.revokeObjectURL(url);
-      }
-      objectUrlsRef.current.clear();
+      stopAllVoices();
       void audioCtxRef.current?.close();
       audioCtxRef.current = null;
     };
   }, []);
 
-  // Keep gain nodes in sync; drop slots for removed clips.
+  // Keep gain nodes in sync; drop voices for removed clips.
   useEffect(() => {
     const alive = new Set(clips.map((c) => c.instanceId));
-    for (const [id, slot] of slotsRef.current) {
+    for (const [id, voice] of voicesRef.current) {
       if (!alive.has(id)) {
-        slot.audio.pause();
-        slot.audio.removeAttribute("src");
-        slot.audio.load();
-        slotsRef.current.delete(id);
+        bumpVoiceGen(id);
+        stopVoice(voice);
+        voicesRef.current.delete(id);
       }
     }
     for (const clip of clips) {
-      const slot = slotsRef.current.get(clip.instanceId);
-      if (slot) slot.gainNode.gain.value = clip.gain;
+      const voice = voicesRef.current.get(clip.instanceId);
+      if (voice) voice.gainNode.gain.value = clip.gain;
     }
   }, [clips]);
 
@@ -809,12 +886,12 @@ function ArrangeEditor({
     [clips],
   );
 
-  // Warm audio blobs for clips in the arrangement.
+  // Warm decoded buffers for clips in the arrangement.
   useEffect(() => {
     if (!peakTrackKey) return;
     const ids = peakTrackKey.split(",").filter(Boolean);
     for (const id of ids) {
-      void ensureTrackObjectUrl(id).catch(() => undefined);
+      void ensureTrackBuffer(id).catch(() => undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [peakTrackKey]);
@@ -826,13 +903,13 @@ function ArrangeEditor({
         rafRef.current = null;
       }
       lastTsRef.current = null;
-      for (const slot of slotsRef.current.values()) slot.audio.pause();
+      stopAllVoices();
       return;
     }
 
     const tick = (ts: number) => {
       if (lastTsRef.current == null) lastTsRef.current = ts;
-      const dt = (ts - lastTsRef.current) / 1000;
+      const dt = Math.min(0.1, (ts - lastTsRef.current) / 1000);
       lastTsRef.current = ts;
       const next = playheadRef.current + dt;
       const soloEnd = soloEndRef.current;
@@ -1068,7 +1145,7 @@ function ArrangeEditor({
       stopTransport();
       return;
     }
-    for (const slot of slotsRef.current.values()) slot.audio.pause();
+    stopAllVoices();
     soloEndRef.current = seg.arrEnd;
     setSoloEndSec(seg.arrEnd);
     setSoloClipId(clip.instanceId);
@@ -1079,18 +1156,6 @@ function ArrangeEditor({
     } else {
       syncAudio(seg.arrStart);
     }
-    void getSlot(clip.instanceId, clip.trackId)
-      .then(async (slot) => {
-        slot.gainNode.gain.value = clip.gain;
-        try {
-          slot.audio.currentTime = clip.inSec;
-        } catch {
-          // ignore
-        }
-        await ensureAudioCtx().resume();
-        if (playRef.current) await slot.audio.play();
-      })
-      .catch(() => undefined);
   }
 
   if (!arrangement) {
@@ -1602,11 +1667,12 @@ function ClipEditorPanel({
   ) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
   const clipRef = useRef(clip);
   clipRef.current = clip;
   const dragRef = useRef<{
     kind: "in" | "out" | "range";
-    grabOffset?: number;
+    grabOffset: number;
     fixedLen?: number;
   } | null>(null);
 
@@ -1628,9 +1694,19 @@ function ClipEditorPanel({
   );
   const effectivePx = Math.min(editorPxPerSec, Math.max(PX_PER_SEC_MIN, maxPx));
   const widthPx = Math.max(320, srcDur * effectivePx);
-  const inX = clip.inSec * effectivePx;
-  const outX = clip.outSec * effectivePx;
+  // Integer pixels so handle lines don't fight subpixel antialias / canvas dim.
+  const inX = Math.round(clip.inSec * effectivePx);
+  const outX = Math.round(clip.outSec * effectivePx);
   const selW = Math.max(4, outX - inX);
+
+  /** X in canvas content coordinates (matches selection `left` / waveform). */
+  function pointerCanvasX(clientX: number) {
+    const canvas = canvasRef.current;
+    if (!canvas) return 0;
+    const rect = canvas.getBoundingClientRect();
+    // clientLeft skips the canvas border so we match absolute `left` coords.
+    return clientX - rect.left - canvas.clientLeft;
+  }
 
   function onPointerDown(
     e: ReactPointerEvent,
@@ -1642,45 +1718,50 @@ function ClipEditorPanel({
     e.stopPropagation();
     const current = clipRef.current;
     if (!current) return;
+    if (!canvasRef.current) return;
     const el = e.currentTarget as HTMLElement;
-    const scroller = scrollRef.current;
-    if (!scroller) return;
     el.setPointerCapture(e.pointerId);
 
+    const x = pointerCanvasX(e.clientX);
+    const at = x / effectivePx;
+
     if (kind === "range") {
-      const rect = scroller.getBoundingClientRect();
-      const x = e.clientX - rect.left + scroller.scrollLeft;
       dragRef.current = {
         kind: "range",
-        grabOffset: x / effectivePx - current.inSec,
+        grabOffset: at - current.inSec,
         fixedLen: current.outSec - current.inSec,
       };
+    } else if (kind === "in") {
+      // Keep the line under the cursor even when grabbing the wide hit area.
+      dragRef.current = { kind: "in", grabOffset: at - current.inSec };
     } else {
-      dragRef.current = { kind };
+      dragRef.current = { kind: "out", grabOffset: at - current.outSec };
     }
 
     const onMove = (ev: PointerEvent) => {
       const d = dragRef.current;
       const c = clipRef.current;
       if (!d || !c) return;
-      const rect = scroller.getBoundingClientRect();
-      const x = ev.clientX - rect.left + scroller.scrollLeft;
-      const at = Math.max(0, Math.min(srcDur, x / effectivePx));
+      const atMove = pointerCanvasX(ev.clientX) / effectivePx;
 
       if (d.kind === "in") {
+        const next = atMove - d.grabOffset;
         onChange({
-          inSec: Math.min(at, c.outSec - MIN_CLIP_SEC),
+          inSec: Math.max(
+            0,
+            Math.min(next, c.outSec - MIN_CLIP_SEC),
+          ),
         });
       } else if (d.kind === "out") {
+        const next = atMove - d.grabOffset;
         onChange({
-          outSec: Math.max(at, c.inSec + MIN_CLIP_SEC),
+          outSec: Math.max(
+            c.inSec + MIN_CLIP_SEC,
+            Math.min(next, srcDur),
+          ),
         });
-      } else if (
-        d.kind === "range" &&
-        d.fixedLen != null &&
-        d.grabOffset != null
-      ) {
-        let nextIn = at - d.grabOffset;
+      } else if (d.kind === "range" && d.fixedLen != null) {
+        let nextIn = atMove - d.grabOffset;
         nextIn = Math.max(0, Math.min(nextIn, srcDur - d.fixedLen));
         onChange({ inSec: nextIn, outSec: nextIn + d.fixedLen });
       }
@@ -1755,7 +1836,11 @@ function ClipEditorPanel({
         </span>
       </div>
       <div className="arr-editor-scroll" ref={scrollRef}>
-        <div className="arr-editor-canvas" style={{ width: widthPx }}>
+        <div
+          className="arr-editor-canvas"
+          ref={canvasRef}
+          style={{ width: widthPx }}
+        >
           <ClipWaveform
             trackId={clip.trackId}
             offsetSec={clip.inSec}
