@@ -27,6 +27,11 @@ import {
 
 const AUTOSAVE_MS = 600;
 const MIN_CLIP_SEC = 0.5;
+
+function arrangementSnapshot(name: string, clips: ArrangementClip[]) {
+  return JSON.stringify({ name, clips });
+}
+
 const ROW_WAVE_H = 40;
 const EDITOR_WAVE_H = 96;
 const PX_PER_SEC_DEFAULT = 24;
@@ -507,6 +512,8 @@ function ArrangeEditor({
   playheadRef.current = playheadSec;
   const soloEndRef = useRef<number | null>(null);
   soloEndRef.current = soloEndSec;
+  const savedSnapshotRef = useRef("");
+  const saveSeqRef = useRef(0);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const slotsRef = useRef<Map<string, AudioSlot>>(new Map());
@@ -535,12 +542,15 @@ function ArrangeEditor({
       try {
         const row = await api.getArrangement(arrangementId);
         if (cancelled) return;
+        savedSnapshotRef.current = arrangementSnapshot(row.name, row.clips);
+        saveSeqRef.current += 1;
         setArrangement(row);
         setClips(row.clips);
         setName(row.name);
         setSelectedId(null);
         setPlayheadSec(0);
         setPlaying(false);
+        setSaveState("idle");
         onError(null);
       } catch (err) {
         if (!cancelled) {
@@ -555,33 +565,78 @@ function ArrangeEditor({
     };
   }, [arrangementId]);
 
-  const persist = useEffectEvent(async () => {
-    if (!arrangement || !isOwner) return;
-    setSaveState("saving");
-    try {
-      const patch: { name?: string; clips?: ArrangementClip[] } = {};
-      if (name !== arrangement.name) patch.name = name;
-      patch.clips = clips;
-      const updated = await api.updateArrangement(arrangementId, patch);
-      setArrangement(updated);
-      setClips(updated.clips);
-      setSaveState("saved");
-      onError(null);
-    } catch (err) {
-      setSaveState("error");
-      onError(
-        err instanceof Error ? err.message : "Failed to save arrangement",
-      );
-    }
-  });
+  const persist = useEffectEvent(
+    async (nextName: string, nextClips: ArrangementClip[]) => {
+      if (!arrangement || !isOwner) return;
+      const snap = arrangementSnapshot(nextName, nextClips);
+      if (snap === savedSnapshotRef.current) {
+        setSaveState("idle");
+        return;
+      }
+      const seq = ++saveSeqRef.current;
+      setSaveState("saving");
+      try {
+        let savedName = "";
+        let savedClips: ArrangementClip[] = [];
+        try {
+          const saved = JSON.parse(savedSnapshotRef.current) as {
+            name: string;
+            clips: ArrangementClip[];
+          };
+          savedName = saved.name;
+          savedClips = saved.clips;
+        } catch {
+          /* first save after a bad/empty snapshot */
+        }
+        const patch: { name?: string; clips?: ArrangementClip[] } = {};
+        if (nextName !== savedName) patch.name = nextName;
+        if (JSON.stringify(nextClips) !== JSON.stringify(savedClips)) {
+          patch.clips = nextClips;
+        }
+        if (patch.name === undefined && patch.clips === undefined) {
+          savedSnapshotRef.current = snap;
+          setSaveState("idle");
+          return;
+        }
+        const updated = await api.updateArrangement(arrangementId, patch);
+        if (seq !== saveSeqRef.current) return;
+        // Keep local draft as source of truth so server normalization
+        // (gain clamp, etc.) does not immediately re-dirty the editor.
+        const committedName = updated.name;
+        savedSnapshotRef.current = arrangementSnapshot(committedName, nextClips);
+        if (committedName !== nextName) setName(committedName);
+        setArrangement((prev) =>
+          prev
+            ? {
+                ...prev,
+                name: committedName,
+                clips: nextClips,
+                updatedAt: updated.updatedAt,
+              }
+            : prev,
+        );
+        setSaveState("saved");
+        onError(null);
+      } catch (err) {
+        if (seq !== saveSeqRef.current) return;
+        setSaveState("error");
+        onError(
+          err instanceof Error ? err.message : "Failed to save arrangement",
+        );
+      }
+    },
+  );
 
   useEffect(() => {
-    if (!arrangement || !isOwner) return;
+    if (!isOwner) return;
+    if (arrangementSnapshot(name, clips) === savedSnapshotRef.current) {
+      return;
+    }
     const t = window.setTimeout(() => {
-      void persist();
+      void persist(name, clips);
     }, AUTOSAVE_MS);
     return () => window.clearTimeout(t);
-  }, [clips, name, arrangement, isOwner, persist]);
+  }, [clips, name, isOwner, persist]);
 
   function ensureAudioCtx() {
     if (!audioCtxRef.current) {
