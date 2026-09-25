@@ -1,6 +1,6 @@
 # iff-audio-server
 
-Monorepo for a small shared audio library: Fastify API (`apps/api`), React/Vite web UI (`apps/web`), and a shared Drizzle/Postgres package (`packages/db`).
+Monorepo for a simple internal audio file server. Built for band members to listen, tag, comment on, and group audio files for release planning and sharing release candidates.
 
 MP3s live in a flat folder configured by `LIBRARY_PATH`. A sync CLI upserts track rows by filename; the DB never deletes missing files (marks them absent). Auth is cookie sessions; there is no public signup — users are created with a CLI script.
 
@@ -23,16 +23,16 @@ MP3s live in a flat folder configured by `LIBRARY_PATH`. A sync CLI upserts trac
    cp .env.example .env
    ```
 
-   | Variable | Scope | Purpose |
-   | --- | --- | --- |
-   | `VITE_BASE_PATH` | Web (build/dev) | Asset base path. Local: `/`. Behind a subpath (e.g. k3s `/apppath`): `/apppath/` |
-   | `VITE_API_URL` | Web (build/dev) | API URL used by the browser. Local: `/api` (Vite proxy). Prod example: `/apppath/api` |
-   | `DATABASE_URL` | API | Postgres connection string |
-   | `SESSION_SECRET` | API | Long random string used to sign session cookies |
-   | `LIBRARY_PATH` | API / CLIs | Absolute or relative path to the flat MP3 library folder |
-   | `CORS_ORIGIN` | API | If set, enables CORS for that origin (local Vite). Leave unset for same-origin prod |
-   | `COOKIE_SECURE` | API | `true` behind HTTPS so session cookies are marked Secure |
-   | `TRUST_PROXY` | API | Optional. Defaults on when `COOKIE_SECURE=true` (TLS terminated at Apache/Ingress) |
+   | Variable         | Scope           | Purpose                                                                               |
+   | ---------------- | --------------- | ------------------------------------------------------------------------------------- |
+   | `VITE_BASE_PATH` | Web (build/dev) | Asset base path. Local: `/`. Behind a subpath (e.g. k3s `/apppath`): `/apppath/`      |
+   | `VITE_API_URL`   | Web (build/dev) | API URL used by the browser. Local: `/api` (Vite proxy). Prod example: `/apppath/api` |
+   | `DATABASE_URL`   | API             | Postgres connection string                                                            |
+   | `SESSION_SECRET` | API             | Long random string used to sign session cookies                                       |
+   | `LIBRARY_PATH`   | API / CLIs      | Absolute or relative path to the flat MP3 library folder                              |
+   | `CORS_ORIGIN`    | API             | If set, enables CORS for that origin (local Vite). Leave unset for same-origin prod   |
+   | `COOKIE_SECURE`  | API             | `true` behind HTTPS so session cookies are marked Secure                              |
+   | `TRUST_PROXY`    | API             | Optional. Defaults on when `COOKIE_SECURE=true` (TLS terminated at Apache/Ingress)    |
 
    Local defaults:
 
