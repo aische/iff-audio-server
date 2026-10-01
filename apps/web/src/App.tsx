@@ -387,7 +387,7 @@ function PoolView({
                   className="tagButton"
                   onClick={() => setTagFilter(null)}
                 >
-                  clear tag
+                  clear #{tagFilter}
                 </button>
               )}
               <button
