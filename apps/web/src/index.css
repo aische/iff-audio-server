@@ -373,6 +373,33 @@ body {
   color: #c00;
 }
 
+.track-dl {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  padding: 0;
+  border: 1px solid #999;
+  background: #ddd;
+  color: #333;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.track-dl:hover:not(:disabled) {
+  background: #ccc;
+  border-color: #666;
+}
+
+.track-dl:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .tag-row {
   display: flex;
   flex-wrap: wrap;

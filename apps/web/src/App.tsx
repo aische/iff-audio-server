@@ -541,6 +541,7 @@ function TrackRow({
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
+  const [downloading, setDownloading] = useState(false);
   const draftRef = useRef(draft);
   const savedBodyRef = useRef(mine?.body ?? "");
   const seqRef = useRef(0);
@@ -654,6 +655,27 @@ function TrackRow({
                 : ""}
         </span>
       </div>
+      <button
+        type="button"
+        className="track-dl"
+        disabled={!track.present || downloading}
+        title={`Download ${track.filename}`}
+        aria-label={`Download ${track.filename}`}
+        onClick={() => {
+          if (!track.present || downloading) return;
+          setDownloading(true);
+          void api
+            .downloadTrack(track.id, track.filename)
+            .catch((err) =>
+              onError(
+                err instanceof Error ? err.message : "Failed to download",
+              ),
+            )
+            .finally(() => setDownloading(false));
+        }}
+      >
+        {downloading ? "…" : "↓"}
+      </button>
       {tags.length > 0 && (
         <div className="tag-row">
           {tags.map((tag) => (
