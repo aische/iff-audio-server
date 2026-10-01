@@ -320,6 +320,11 @@ function PoolView({
     return true;
   });
 
+  const visibleTotalSec = visible.reduce(
+    (sum, t) => sum + (t.durationSeconds ?? 0),
+    0,
+  );
+
   return (
     <div className="app">
       {error && mode === "arrange" && (
@@ -374,7 +379,7 @@ function PoolView({
               ))}
               <span className="filter-meta">
                 ({tagFilter ? `#${tagFilter}` : filter}) [{visible.length}{" "}
-                tracks]
+                tracks · {formatDuration(Math.floor(visibleTotalSec))}]
               </span>
               {tagFilter && (
                 <button
