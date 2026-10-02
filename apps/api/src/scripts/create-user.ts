@@ -11,12 +11,15 @@ const root = path.resolve(
 );
 dotenv.config({ path: path.join(root, ".env") });
 
-const email = process.argv[2]?.trim().toLowerCase();
-const password = process.argv[3];
+const args = process.argv.slice(2);
+const reset = args.includes("--reset");
+const positional = args.filter((arg) => arg !== "--reset");
+const email = positional[0]?.trim().toLowerCase();
+const password = positional[1];
 
-if (!email || !password) {
+if (!email || !password || positional.length !== 2) {
   console.error(
-    "Usage: npm run create-user -w api -- email@example.com password",
+    "Usage: npm run create-user -w api -- email@example.com password [--reset]",
   );
   process.exit(1);
 }
@@ -36,6 +39,22 @@ const [existing] = await db
   .from(users)
   .where(eq(users.email, email))
   .limit(1);
+
+if (reset) {
+  if (!existing) {
+    console.error("No such user:", email);
+    process.exit(1);
+  }
+  const passwordHash = await bcrypt.hash(password, 12);
+  const [user] = await db
+    .update(users)
+    .set({ passwordHash })
+    .where(eq(users.id, existing.id))
+    .returning({ id: users.id, email: users.email });
+  console.log("Reset password for user:", user);
+  process.exit(0);
+}
+
 if (existing) {
   console.error("User already exists:", email);
   process.exit(1);

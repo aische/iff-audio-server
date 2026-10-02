@@ -121,6 +121,9 @@ MIGRATE=1 npm run deploy:k3s:apply
 ```bash
 export DEPLOY_HOST=you@your-server
 ./deploy/k3s/create-user.sh you@example.com 'your-password'
+
+# Reset an existing user's password
+./deploy/k3s/create-user.sh you@example.com 'new-password' --reset
 ```
 
 ---

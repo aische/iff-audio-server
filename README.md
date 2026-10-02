@@ -107,6 +107,9 @@ There is no registration or browser upload. Use these CLIs (require `DATABASE_UR
 # Create a user
 npm run create-user -w api -- you@example.com 'your-password'
 
+# Reset an existing user's password (errors if the user does not exist)
+npm run create-user -w api -- you@example.com 'new-password' --reset
+
 # Upsert tracks from the library folder (never deletes DB rows)
 npm run sync-library -w api
 
