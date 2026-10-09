@@ -18,6 +18,7 @@ import {
   type ArrangementClip,
 } from "@iff/db";
 import { libraryFilePath, requireLibraryPath } from "./library.js";
+import { createSessionStore } from "./sessionStore.js";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -44,13 +45,22 @@ if (corsOrigin) {
   });
 }
 
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 await app.register(cookie);
 await app.register(session, {
   secret: process.env.SESSION_SECRET,
+  // Only persist sessions that hold data (i.e. after login), not every probe/bot hit.
+  saveUninitialized: false,
+  store: createSessionStore(db, {
+    fallbackTtlMs: SESSION_TTL_MS,
+    pruneIntervalMs: 60 * 60 * 1000,
+  }),
   cookie: {
     httpOnly: true,
     sameSite: "lax",
     secure: cookieSecure,
+    maxAge: SESSION_TTL_MS,
   },
 });
 
