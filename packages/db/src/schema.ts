@@ -89,3 +89,10 @@ export const arrangements = pgTable(
   },
   (t) => [unique("arrangements_user_name_unique").on(t.userId, t.name)],
 );
+
+/** @fastify/session store; `data` is the serialized session (incl. cookie). */
+export const sessions = pgTable("sessions", {
+  id: text("id").primaryKey(),
+  data: jsonb("data").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});

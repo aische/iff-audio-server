@@ -1,11 +1,11 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import session from "@fastify/session";
+import fastifyStatic from "@fastify/static";
 import bcrypt from "bcrypt";
 import dotenv from "dotenv";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
@@ -18,6 +18,7 @@ import {
   type ArrangementClip,
 } from "@iff/db";
 import { libraryFilePath, requireLibraryPath } from "./library.js";
+import { createSessionStore } from "./sessionStore.js";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -44,15 +45,36 @@ if (corsOrigin) {
   });
 }
 
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 await app.register(cookie);
 await app.register(session, {
   secret: process.env.SESSION_SECRET,
+  // Only persist sessions that hold data (i.e. after login), not every probe/bot hit.
+  saveUninitialized: false,
+  store: createSessionStore(db, {
+    fallbackTtlMs: SESSION_TTL_MS,
+    pruneIntervalMs: 60 * 60 * 1000,
+  }),
   cookie: {
     httpOnly: true,
     sameSite: "lax",
     secure: cookieSecure,
+    maxAge: SESSION_TTL_MS,
   },
 });
+
+// Only for reply.sendFile (Range/ETag/Content-Length); routes stay behind auth.
+await app.register(fastifyStatic, { root: libraryPath, serve: false });
+
+/** Header-safe ASCII fallback plus RFC 5987 UTF-8 filename. */
+function contentDisposition(filename: string) {
+  const fallback = filename.replace(/[^\x20-\x7e]|["\\]/g, "_");
+  return `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename).replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  )}`;
+}
 
 declare module "fastify" {
   interface Session {
@@ -224,9 +246,8 @@ app.get<{ Params: { id: string } }>(
       return reply.code(404).send({ error: "file missing" });
     }
 
-    reply.header("Content-Type", "audio/mpeg");
-    reply.header("Content-Disposition", `inline; filename="${track.filename}"`);
-    return reply.send(createReadStream(absPath));
+    reply.header("Content-Disposition", contentDisposition(track.filename));
+    return reply.type("audio/mpeg").sendFile(path.basename(absPath));
   },
 );
 
