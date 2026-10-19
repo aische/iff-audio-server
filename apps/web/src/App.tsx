@@ -311,6 +311,10 @@ function PoolView({
     );
   }
 
+  const allTags = unifiedTags(
+    tracks.flatMap((t) => t.comments.map((c) => c.body)),
+  );
+
   const visible = tracks.filter((t) => {
     if (filter === "commented" && t.comments.length === 0) return false;
     if (tagFilter) {
@@ -377,6 +381,23 @@ function PoolView({
                   {label}
                 </button>
               ))}
+              {allTags.length > 0 && (
+                <select
+                  className={
+                    tagFilter ? "tagSelect tagSelectActive" : "tagSelect"
+                  }
+                  value={tagFilter ?? ""}
+                  onChange={(e) => setTagFilter(e.target.value || null)}
+                  aria-label="Filter by tag"
+                >
+                  <option value="">tags…</option>
+                  {allTags.map((tag) => (
+                    <option key={tag} value={tag}>
+                      #{tag}
+                    </option>
+                  ))}
+                </select>
+              )}
               <span className="filter-meta">
                 ({tagFilter ? `#${tagFilter}` : filter}) [{visible.length}{" "}
                 tracks · {formatDuration(Math.floor(visibleTotalSec))}]
