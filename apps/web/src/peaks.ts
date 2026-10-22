@@ -71,15 +71,35 @@ export function drawClipWaveform(
     startBin + 1,
     Math.ceil(((offsetSec + durationSec) / sourceDurationSec) * peaks.length),
   );
+  // One column per bin or per pixel, whichever is fewer: zoomed-in clips can
+  // be hundreds of thousands of px wide but only have a few hundred bins.
   const span = endBin - startBin;
-  const step = span / width;
-
-  ctx.beginPath();
-  for (let x = 0; x < width; x++) {
-    const i = Math.min(peaks.length - 1, startBin + Math.floor(x * step));
-    const amp = peaks[i]! * (height * 0.42);
-    ctx.moveTo(x + 0.5, mid - amp);
-    ctx.lineTo(x + 0.5, mid + amp);
+  const cols = Math.max(1, Math.min(Math.ceil(width), span));
+  const colW = width / cols;
+  const amps = new Float32Array(cols);
+  for (let c = 0; c < cols; c++) {
+    const b0 = startBin + Math.floor((c * span) / cols);
+    const b1 = Math.max(b0 + 1, startBin + Math.floor(((c + 1) * span) / cols));
+    let peak = 0;
+    for (let i = b0; i < b1 && i < peaks.length; i++) {
+      peak = Math.max(peak, peaks[i]!);
+    }
+    amps[c] = peak * (height * 0.42);
   }
-  ctx.stroke();
+
+  // Filled envelope: top edge left→right, bottom edge back.
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.beginPath();
+  ctx.moveTo(0, mid - amps[0]!);
+  for (let c = 0; c < cols; c++) {
+    ctx.lineTo((c + 0.5) * colW, mid - amps[c]!);
+  }
+  ctx.lineTo(width, mid - amps[cols - 1]!);
+  ctx.lineTo(width, mid + amps[cols - 1]!);
+  for (let c = cols - 1; c >= 0; c--) {
+    ctx.lineTo((c + 0.5) * colW, mid + amps[c]!);
+  }
+  ctx.lineTo(0, mid + amps[0]!);
+  ctx.closePath();
+  ctx.fill();
 }
