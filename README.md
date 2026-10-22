@@ -8,6 +8,7 @@ MP3s live in a flat folder configured by `LIBRARY_PATH`. A sync CLI upserts trac
 
 - Node.js 20+ and npm
 - Docker (for local Postgres)
+- `ffmpeg` on `PATH` (used by `sync-library` to compute waveform peaks and durations; e.g. `brew install ffmpeg`)
 
 ## Setup
 
@@ -123,6 +124,7 @@ npm run migrate -w @iff/db
 
 - Email is stored lowercased; password must be at least 8 characters
 - Sync only considers `*.mp3` files in the top level of `LIBRARY_PATH`
+- Sync decodes new, changed, or not-yet-processed files with `ffmpeg` and stores `duration_seconds` plus an 800-bin overview waveform (`peaks`); a file that fails is logged and retried on the next sync. Without `ffmpeg` the step is skipped with a warning
 - Filenames are case-sensitive (as on Linux/k3s)
 
 ## Database

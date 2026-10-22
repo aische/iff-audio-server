@@ -3,7 +3,12 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { eq, inArray } from "drizzle-orm";
 import { createDb, tracks } from "@iff/db";
-import { listLibraryMp3s, requireLibraryPath } from "../library.js";
+import {
+  libraryFilePath,
+  listLibraryMp3s,
+  requireLibraryPath,
+} from "../library.js";
+import { computePeaks, hasFfmpeg } from "../peaks.js";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -36,23 +41,31 @@ let updated = 0;
 const existing = await db.select().from(tracks);
 const byFilename = new Map(existing.map((t) => [t.filename, t]));
 
+/** Rows whose peaks + duration must be (re)computed after the upsert pass. */
+const needPeaks: { id: string; filename: string }[] = [];
+
 for (const file of onDisk) {
   const row = byFilename.get(file.filename);
   if (!row) {
-    await db.insert(tracks).values({
-      filename: file.filename,
-      present: true,
-      sizeBytes: file.sizeBytes,
-      mtime: file.mtime,
-      updatedAt: now,
-    });
+    const [created] = await db
+      .insert(tracks)
+      .values({
+        filename: file.filename,
+        present: true,
+        sizeBytes: file.sizeBytes,
+        mtime: file.mtime,
+        updatedAt: now,
+      })
+      .returning({ id: tracks.id });
+    needPeaks.push({ id: created.id, filename: file.filename });
     inserted++;
     continue;
   }
 
   const sameSize = row.sizeBytes === file.sizeBytes;
   const sameMtime = row.mtime.getTime() === file.mtime.getTime();
-  if (!row.present || !sameSize || !sameMtime) {
+  const contentChanged = !sameSize || !sameMtime;
+  if (!row.present || contentChanged) {
     await db
       .update(tracks)
       .set({
@@ -60,9 +73,14 @@ for (const file of onDisk) {
         sizeBytes: file.sizeBytes,
         mtime: file.mtime,
         updatedAt: now,
+        // Stale for the new file contents; recomputed below.
+        ...(contentChanged ? { peaks: null, durationSeconds: null } : {}),
       })
       .where(eq(tracks.id, row.id));
     updated++;
+  }
+  if (contentChanged || row.peaks == null || row.durationSeconds == null) {
+    needPeaks.push({ id: row.id, filename: file.filename });
   }
 }
 
@@ -79,6 +97,37 @@ if (missingIds.length > 0) {
   markedMissing = missingIds.length;
 }
 
+let peaksComputed = 0;
+let peaksFailed = 0;
+let peaksSkipped = false;
+
+if (needPeaks.length > 0) {
+  if (!(await hasFfmpeg())) {
+    peaksSkipped = true;
+    console.warn(
+      `ffmpeg not found on PATH — skipping peaks/duration for ${needPeaks.length} track(s)`,
+    );
+  } else {
+    for (const [i, item] of needPeaks.entries()) {
+      const label = `[${i + 1}/${needPeaks.length}] ${item.filename}`;
+      try {
+        const { peaks, durationSec } = await computePeaks(
+          libraryFilePath(libraryPath, item.filename),
+        );
+        await db
+          .update(tracks)
+          .set({ peaks, durationSeconds: Math.round(durationSec) })
+          .where(eq(tracks.id, item.id));
+        peaksComputed++;
+        console.log(`${label} ${durationSec.toFixed(1)}s`);
+      } catch (e) {
+        peaksFailed++;
+        console.error(`${label} failed:`, e instanceof Error ? e.message : e);
+      }
+    }
+  }
+}
+
 console.log(
   JSON.stringify(
     {
@@ -87,6 +136,10 @@ console.log(
       inserted,
       updated,
       markedMissing,
+      peaksPending: needPeaks.length,
+      peaksComputed,
+      peaksFailed,
+      peaksSkipped,
     },
     null,
     2,

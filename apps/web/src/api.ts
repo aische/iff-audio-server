@@ -21,6 +21,8 @@ export type Track = {
   present: boolean;
   sizeBytes: number;
   durationSeconds: number | null;
+  /** Release label this track was published on; null = unreleased. */
+  releasedOn: string | null;
   mtime: string;
   createdAt: string;
   updatedAt: string;
@@ -137,6 +139,17 @@ export const api = {
     }),
 
   listTracks: () => request<Track[]>("/tracks"),
+
+  getTrackPeaks: (trackId: string) =>
+    request<{ peaks: number[]; durationSec: number }>(
+      `/tracks/${trackId}/peaks`,
+    ),
+
+  setTrackReleasedOn: (trackId: string, releasedOn: string | null) =>
+    request<{ id: string; releasedOn: string | null; updatedAt: string }>(
+      `/tracks/${trackId}`,
+      { method: "PATCH", json: { releasedOn } },
+    ),
 
   getTrackComments: (trackId: string) =>
     request<Comment[]>(`/tracks/${trackId}/comments`),

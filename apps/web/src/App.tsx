@@ -18,6 +18,8 @@ import {
 import { ArrangeShell } from "./ArrangeView";
 
 const SHOW_OTHERS_KEY = "iff-show-other-comments";
+const HIDE_RELEASED_KEY = "iff-hide-released";
+const SORT_KEY = "iff-pool-sort";
 const TITLE_W_KEY = "iff-title-width";
 const COMMENT_W_KEY = "iff-comment-width";
 const AUTOSAVE_MS = 500;
@@ -30,6 +32,11 @@ const COMMENT_W_MIN = 120;
 const COMMENT_W_MAX = 900;
 
 type FilterId = "all" | "commented";
+type SortKey = "name" | "duration";
+type SortDir = "asc" | "desc";
+type PoolSort = { key: SortKey; dir: SortDir };
+
+const SORT_DEFAULT: PoolSort = { key: "name", dir: "asc" };
 
 function readStoredWidth(
   key: string,
@@ -117,6 +124,54 @@ function formatDuration(seconds: number | null): string {
 
 function shortTitle(filename: string): string {
   return filename.replace(/\.aif\.mp3$/i, "").replace(/\.mp3$/i, "");
+}
+
+function readHideReleased(): boolean {
+  try {
+    // Default on: the working set is unreleased tracks.
+    return localStorage.getItem(HIDE_RELEASED_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function readSort(): PoolSort {
+  try {
+    const raw = localStorage.getItem(SORT_KEY);
+    if (!raw) return SORT_DEFAULT;
+    const v = JSON.parse(raw) as Partial<PoolSort>;
+    if (
+      (v.key === "name" || v.key === "duration") &&
+      (v.dir === "asc" || v.dir === "desc")
+    ) {
+      return { key: v.key, dir: v.dir };
+    }
+    return SORT_DEFAULT;
+  } catch {
+    return SORT_DEFAULT;
+  }
+}
+
+/** Sort by display title or duration; missing durations always last. */
+function sortTracks(list: Track[], sort: PoolSort): Track[] {
+  const sign = sort.dir === "asc" ? 1 : -1;
+  const byName = (a: Track, b: Track) =>
+    shortTitle(a.filename).localeCompare(shortTitle(b.filename), undefined, {
+      sensitivity: "base",
+      numeric: true,
+    });
+  return [...list].sort((a, b) => {
+    if (sort.key === "duration") {
+      const da = a.durationSeconds;
+      const db = b.durationSeconds;
+      if (da == null || db == null) {
+        if (da == null && db == null) return byName(a, b);
+        return da == null ? 1 : -1;
+      }
+      return (da - db) * sign || byName(a, b);
+    }
+    return byName(a, b) * sign;
+  });
 }
 
 function readShowOthers(): boolean {
@@ -256,6 +311,8 @@ function PoolView({
   const [filter, setFilter] = useState<FilterId>("all");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [showOthers, setShowOthers] = useState(readShowOthers);
+  const [hideReleased, setHideReleased] = useState(readHideReleased);
+  const [sort, setSort] = useState(readSort);
   const [accountOpen, setAccountOpen] = useState(false);
   const [mode, setMode] = useState<"pool" | "arrange">("pool");
   const titleCol = usePersistedWidth(
@@ -305,6 +362,34 @@ function PoolView({
     }
   }
 
+  function setHideReleasedPersist(value: boolean) {
+    setHideReleased(value);
+    try {
+      localStorage.setItem(HIDE_RELEASED_KEY, value ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }
+
+  function toggleSort(key: SortKey) {
+    const next: PoolSort =
+      sort.key === key
+        ? { key, dir: sort.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: "asc" };
+    setSort(next);
+    try {
+      localStorage.setItem(SORT_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  }
+
+  function patchTrack(trackId: string, patch: Partial<Track>) {
+    setTracks((prev) =>
+      prev.map((t) => (t.id === trackId ? { ...t, ...patch } : t)),
+    );
+  }
+
   function patchTrackComments(trackId: string, next: Comment[]) {
     setTracks((prev) =>
       prev.map((t) => (t.id === trackId ? { ...t, comments: next } : t)),
@@ -315,7 +400,8 @@ function PoolView({
     tracks.flatMap((t) => t.comments.map((c) => c.body)),
   );
 
-  const visible = tracks.filter((t) => {
+  const filtered = tracks.filter((t) => {
+    if (hideReleased && t.releasedOn) return false;
     if (filter === "commented" && t.comments.length === 0) return false;
     if (tagFilter) {
       const tags = unifiedTags(t.comments.map((c) => c.body));
@@ -323,6 +409,7 @@ function PoolView({
     }
     return true;
   });
+  const visible = sortTracks(filtered, sort);
 
   const visibleTotalSec = visible.reduce(
     (sum, t) => sum + (t.durationSeconds ?? 0),
@@ -338,6 +425,8 @@ function PoolView({
         <ArrangeShell
           user={user}
           tracks={tracks}
+          hideReleased={hideReleased}
+          onHideReleasedChange={setHideReleasedPersist}
           onBack={() => setMode("pool")}
           onError={onError}
         />
@@ -414,6 +503,16 @@ function PoolView({
               <button
                 type="button"
                 className={
+                  hideReleased ? "filterButton filterSelected" : "filterButton"
+                }
+                onClick={() => setHideReleasedPersist(!hideReleased)}
+                title="Hide tracks that already have a release label"
+              >
+                {hideReleased ? "released hidden" : "released shown"}
+              </button>
+              <button
+                type="button"
+                className={
                   showOthers ? "filterButton filterSelected" : "filterButton"
                 }
                 onClick={() => setShowOthersPersist(!showOthers)}
@@ -477,8 +576,20 @@ function PoolView({
               <div className="trackList" style={colStyle}>
                 <div className="col-header">
                   <div className="trackBox1">
-                    <div className="trackDur" aria-hidden="true" />
-                    <div className="trackTitle col-label">title</div>
+                    <SortHeader
+                      className="trackDur"
+                      label="dur"
+                      sortKey="duration"
+                      sort={sort}
+                      onToggle={toggleSort}
+                    />
+                    <SortHeader
+                      className="trackTitle"
+                      label="title"
+                      sortKey="name"
+                      sort={sort}
+                      onToggle={toggleSort}
+                    />
                   </div>
                   <div
                     className="col-resize"
@@ -523,6 +634,9 @@ function PoolView({
                     onCommentsChange={(next) =>
                       patchTrackComments(track.id, next)
                     }
+                    onReleasedOnChange={(releasedOn) =>
+                      patchTrack(track.id, { releasedOn })
+                    }
                     onError={onError}
                   />
                 ))}
@@ -535,6 +649,137 @@ function PoolView({
   );
 }
 
+function SortHeader({
+  className,
+  label,
+  sortKey,
+  sort,
+  onToggle,
+}: {
+  className: string;
+  label: string;
+  sortKey: SortKey;
+  sort: PoolSort;
+  onToggle: (key: SortKey) => void;
+}) {
+  const active = sort.key === sortKey;
+  return (
+    <button
+      type="button"
+      className={`${className} col-sort${active ? " col-sort-active" : ""}`}
+      aria-sort={
+        active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"
+      }
+      title={`Sort by ${label}`}
+      onClick={() => onToggle(sortKey)}
+    >
+      {label}
+      {active ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
+    </button>
+  );
+}
+
+function ReleaseLabel({
+  track,
+  onChange,
+  onError,
+}: {
+  track: Track;
+  onChange: (releasedOn: string | null) => void;
+  onError: (message: string | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function save(value: string | null) {
+    const next = value?.trim() || null;
+    if (next === track.releasedOn) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    try {
+      const row = await api.setTrackReleasedOn(track.id, next);
+      onChange(row.releasedOn);
+      setEditing(false);
+      onError(null);
+    } catch (err) {
+      onError(
+        err instanceof Error ? err.message : "Failed to save release label",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <form
+        className="release-edit"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save(draft);
+        }}
+      >
+        <input
+          autoFocus
+          value={draft}
+          disabled={busy}
+          placeholder="release…"
+          aria-label={`Release label for ${track.filename}`}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setEditing(false);
+          }}
+        />
+        <button type="submit" className="release-btn" disabled={busy}>
+          ok
+        </button>
+        {track.releasedOn && (
+          <button
+            type="button"
+            className="release-btn"
+            disabled={busy}
+            title="Mark as unreleased"
+            onClick={() => void save(null)}
+          >
+            clear
+          </button>
+        )}
+        <button
+          type="button"
+          className="release-btn"
+          disabled={busy}
+          onClick={() => setEditing(false)}
+        >
+          ×
+        </button>
+      </form>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={
+        track.releasedOn ? "release-label release-set" : "release-label"
+      }
+      title={
+        track.releasedOn
+          ? `Released on ${track.releasedOn} — click to edit`
+          : "Mark as released"
+      }
+      onClick={() => {
+        setDraft(track.releasedOn ?? "");
+        setEditing(true);
+      }}
+    >
+      {track.releasedOn ?? "rel"}
+    </button>
+  );
+}
+
 function TrackRow({
   track,
   user,
@@ -544,6 +789,7 @@ function TrackRow({
   onPlay,
   onTagClick,
   onCommentsChange,
+  onReleasedOnChange,
   onError,
 }: {
   track: Track;
@@ -554,6 +800,7 @@ function TrackRow({
   onPlay: () => void;
   onTagClick: (tag: string) => void;
   onCommentsChange: (comments: Comment[]) => void;
+  onReleasedOnChange: (releasedOn: string | null) => void;
   onError: (message: string | null) => void;
 }) {
   const mine = track.comments.find((c) => c.userId === user.id);
@@ -697,6 +944,11 @@ function TrackRow({
       >
         {downloading ? "…" : "↓"}
       </button>
+      <ReleaseLabel
+        track={track}
+        onChange={onReleasedOnChange}
+        onError={onError}
+      />
       {tags.length > 0 && (
         <div className="tag-row">
           {tags.map((tag) => (

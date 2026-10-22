@@ -16,6 +16,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV LIBRARY_PATH=/library
 
+# sync-library decodes MP3s with ffmpeg to compute waveform peaks + duration
+RUN apk add --no-cache ffmpeg
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY apps/api ./apps/api

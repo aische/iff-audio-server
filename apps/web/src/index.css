@@ -268,6 +268,27 @@ body {
   height: 18px;
 }
 
+.col-header .col-sort {
+  height: auto;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: #444;
+  text-align: left;
+  cursor: pointer;
+}
+
+.col-header .col-sort:hover {
+  color: #000;
+  text-decoration: underline;
+}
+
+.col-header .col-sort-active {
+  color: #000;
+}
+
 .col-resize {
   width: 6px;
   flex-shrink: 0;
@@ -417,6 +438,62 @@ body {
 .track-dl:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.release-label {
+  flex-shrink: 0;
+  max-width: 140px;
+  height: 16px;
+  margin-top: 2px;
+  padding: 0 4px;
+  border: 1px dashed #bbb;
+  background: transparent;
+  color: #aaa;
+  font: inherit;
+  font-size: 11px;
+  line-height: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.release-label:hover {
+  border-color: #666;
+  color: #333;
+}
+
+.release-label.release-set {
+  border: 1px solid #6a6;
+  background: #cec;
+  color: #030;
+}
+
+.release-edit {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  margin-top: 1px;
+}
+
+.release-edit input {
+  width: 120px;
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 4px;
+  border: 1px solid #999;
+  background: #fff;
+  color: #000;
+}
+
+.release-btn {
+  font: inherit;
+  font-size: 11px;
+  padding: 0 4px;
+  border: 1px solid #999;
+  background: #ddd;
+  color: #000;
+  cursor: pointer;
 }
 
 .tag-row {
