@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -71,6 +72,63 @@ const SEEK_JUMP_SEC = 0.3;
 
 const trackBuffers = new Map<string, AudioBuffer>();
 const trackBufferInflight = new Map<string, Promise<AudioBuffer>>();
+
+/**
+ * Playhead time kept outside React state: the transport updates it every
+ * frame, and only the small components that display it re-render.
+ */
+type PlayheadStore = {
+  get: () => number;
+  set: (sec: number) => void;
+  subscribe: (listener: () => void) => () => void;
+};
+
+function createPlayheadStore(): PlayheadStore {
+  let value = 0;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => value,
+    set(sec) {
+      if (sec === value) return;
+      value = sec;
+      for (const l of listeners) l();
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+/** Re-renders only when `select(playhead)` changes. */
+function usePlayhead<T>(store: PlayheadStore, select: (sec: number) => T): T {
+  return useSyncExternalStore(store.subscribe, () => select(store.get()));
+}
+
+function PlayheadClock({ store }: { store: PlayheadStore }) {
+  return <>{usePlayhead(store, formatClock)}</>;
+}
+
+/** Playhead line inside a sequence row; renders nothing outside the row's span. */
+function RowPlayhead({
+  store,
+  arrStart,
+  arrEnd,
+  pxPerSec,
+}: {
+  store: PlayheadStore;
+  arrStart: number;
+  arrEnd: number;
+  pxPerSec: number;
+}) {
+  const left = usePlayhead(store, (sec) =>
+    sec >= arrStart && sec < arrEnd
+      ? Math.round((sec - arrStart) * pxPerSec)
+      : null,
+  );
+  if (left == null) return null;
+  return <div className="arr-row-playhead" style={{ left }} />;
+}
 
 function newInstanceId() {
   return crypto.randomUUID();
@@ -557,7 +615,8 @@ function ArrangeEditor({
   const [pxPerSec, setPxPerSec] = useState(PX_PER_SEC_DEFAULT);
   const [editorPxPerSec, setEditorPxPerSec] = useState(EDITOR_PX_DEFAULT);
   const [playing, setPlaying] = useState(false);
-  const [playheadSec, setPlayheadSec] = useState(0);
+  const [playhead] = useState(createPlayheadStore);
+  const setPlayheadSec = playhead.set;
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
@@ -573,8 +632,6 @@ function ArrangeEditor({
   clipsRef.current = clips;
   const playRef = useRef(playing);
   playRef.current = playing;
-  const playheadRef = useRef(playheadSec);
-  playheadRef.current = playheadSec;
   const soloEndRef = useRef<number | null>(null);
   soloEndRef.current = soloEndSec;
   const savedSnapshotRef = useRef("");
@@ -597,6 +654,14 @@ function ArrangeEditor({
     return m;
   }, [tracks]);
 
+  const tagsByTrack = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const t of tracks) {
+      m.set(t.id, unifiedTags(t.comments.map((c) => c.body)));
+    }
+    return m;
+  }, [tracks]);
+
   const isOwner = arrangement?.userId === user.id;
   const { segs, totalSec } = useMemo(() => buildSchedule(clips), [clips]);
   const segsRef = useRef(segs);
@@ -616,7 +681,7 @@ function ArrangeEditor({
         setClips(row.clips);
         setName(row.name);
         setSelectedId(null);
-        setPlayheadSec(0);
+        playhead.set(0);
         setPlaying(false);
         setSaveState("idle");
         onError(null);
@@ -631,7 +696,7 @@ function ArrangeEditor({
     return () => {
       cancelled = true;
     };
-  }, [arrangementId]);
+  }, [arrangementId, playhead]);
 
   const persist = useEffectEvent(
     async (nextName: string, nextClips: ArrangementClip[]) => {
@@ -839,7 +904,7 @@ function ArrangeEditor({
           if (voiceGenRef.current.get(clip.instanceId) !== gen) return;
           if (!playRef.current) return;
 
-          const nowAt = playheadRef.current;
+          const nowAt = playhead.get();
           const still = segsRef.current.find(
             (s) =>
               s.kind === "audio" &&
@@ -971,7 +1036,7 @@ function ArrangeEditor({
       if (lastTsRef.current == null) lastTsRef.current = ts;
       const dt = Math.min(0.1, (ts - lastTsRef.current) / 1000);
       lastTsRef.current = ts;
-      const next = playheadRef.current + dt;
+      const next = playhead.get() + dt;
       const soloEnd = soloEndRef.current;
       if (soloEnd != null && next >= soloEnd) {
         setPlayheadSec(soloEnd);
@@ -989,7 +1054,7 @@ function ArrangeEditor({
       rafRef.current = requestAnimationFrame(tick);
     };
     void ensureAudioCtx().resume();
-    syncAudio(playheadRef.current);
+    syncAudio(playhead.get());
     rafRef.current = requestAnimationFrame(tick);
     return () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
@@ -1059,9 +1124,8 @@ function ArrangeEditor({
     if (!t.present) return false;
     if (hideReleased && t.releasedOn) return false;
     if (filter === "commented" && t.comments.length === 0) return false;
-    if (tagFilter) {
-      const tags = unifiedTags(t.comments.map((c) => c.body));
-      if (!tags.includes(tagFilter)) return false;
+    if (tagFilter && !tagsByTrack.get(t.id)?.includes(tagFilter)) {
+      return false;
     }
     return true;
   });
@@ -1211,7 +1275,6 @@ function ArrangeEditor({
     setSoloEndSec(seg.arrEnd);
     setSoloClipId(clip.instanceId);
     setPlayheadSec(seg.arrStart);
-    playheadRef.current = seg.arrStart;
     if (!playing) {
       setPlaying(true);
     } else {
@@ -1299,7 +1362,7 @@ function ArrangeEditor({
           +
         </button>
         <span className="arr-muted">
-          ▶ {formatClock(playheadSec)} / {formatClock(totalSec)} ·{" "}
+          ▶ <PlayheadClock store={playhead} /> / {formatClock(totalSec)} ·{" "}
           {clips.length} clips · {formatPxPerSec(pxPerSec)} px/s
         </span>
         <span className="arr-clip-times" aria-live="polite">
@@ -1383,7 +1446,7 @@ function ArrangeEditor({
           </div>
           <div className="arr-sidebar-list">
             {sidebarTracks.map((t) => {
-              const tags = unifiedTags(t.comments.map((c) => c.body));
+              const tags = tagsByTrack.get(t.id) ?? [];
               return (
                 <div
                   key={t.id}
@@ -1489,10 +1552,6 @@ function ArrangeEditor({
                       s.kind === "audio" &&
                       s.clip.instanceId === clip.instanceId,
                   );
-                  const playheadInRow =
-                    audioSeg &&
-                    playheadSec >= audioSeg.arrStart &&
-                    playheadSec < audioSeg.arrEnd;
 
                   return (
                     <div key={clip.instanceId} className="arr-row-block">
@@ -1672,14 +1731,12 @@ function ArrangeEditor({
                               height={ROW_WAVE_H}
                               peaksVersion={peaksVersion}
                             />
-                            {playheadInRow && audioSeg && (
-                              <div
-                                className="arr-row-playhead"
-                                style={{
-                                  left:
-                                    (playheadSec - audioSeg.arrStart) *
-                                    pxPerSec,
-                                }}
+                            {audioSeg && (
+                              <RowPlayhead
+                                store={playhead}
+                                arrStart={audioSeg.arrStart}
+                                arrEnd={audioSeg.arrEnd}
+                                pxPerSec={pxPerSec}
                               />
                             )}
                           </div>
