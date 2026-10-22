@@ -1177,6 +1177,14 @@ body {
   border-color: #886;
 }
 
+.arr-mode-toggle {
+  display: inline-flex;
+}
+
+.arr-mode-toggle .filterButton + .filterButton {
+  border-left: none;
+}
+
 .arr-comments {
   flex-shrink: 0;
   max-height: 28vh;

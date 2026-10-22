@@ -10,7 +10,6 @@ import {
 } from "react";
 import {
   api,
-  trackStreamUrl,
   unifiedTags,
   type Arrangement,
   type ArrangementClip,
@@ -25,6 +24,13 @@ import {
   loadPeaks,
   type PeaksRecord,
 } from "./peaks";
+import {
+  createPlaybackEngine,
+  PLAYBACK_MODES,
+  type ClipVoice,
+  type PlaybackEngine,
+  type PlaybackMode,
+} from "./arrangePlayback";
 
 const AUTOSAVE_MS = 600;
 const MIN_CLIP_SEC = 0.5;
@@ -55,23 +61,40 @@ type ScheduleSeg = {
   kind: "audio" | "pause";
 };
 
-/** One scheduled BufferSource for a clip instance while the transport is playing. */
-type ActiveVoice = {
+/**
+ * Voice for a clip instance (the current or next one) while the transport
+ * runs. `gen` bumps whenever a pending load/start becomes stale.
+ */
+type VoiceSlot = {
   instanceId: string;
   trackId: string;
-  source: AudioBufferSourceNode;
-  gainNode: GainNode;
-  /** audioCtx.currentTime when source.start ran */
-  ctxStart: number;
-  /** Offset into the AudioBuffer at ctxStart */
-  bufferOffset: number;
+  voice: ClipVoice;
+  state: "idle" | "loading" | "ready" | "started" | "failed";
+  gen: number;
 };
 
 /** Restart a voice only after an explicit seek (not rAF vs audio clock drift). */
 const SEEK_JUMP_SEC = 0.3;
+/** Start the next clip this far ahead so the engine can schedule it on time. */
+const LOOKAHEAD_SEC = 0.2;
+/** Show "loading…" only when audio is held up longer than this. */
+const WAITING_HINT_MS = 200;
+const PLAYBACK_MODE_KEY = "iff-arrange-playback";
 
-const trackBuffers = new Map<string, AudioBuffer>();
-const trackBufferInflight = new Map<string, Promise<AudioBuffer>>();
+function readPlaybackMode(): PlaybackMode {
+  try {
+    const raw = localStorage.getItem(PLAYBACK_MODE_KEY);
+    return raw === "precise" ? "precise" : "stream";
+  } catch {
+    return "stream";
+  }
+}
+
+function audioSegAt(segs: ScheduleSeg[], at: number) {
+  return segs.find(
+    (s) => s.kind === "audio" && at >= s.arrStart && at < s.arrEnd,
+  );
+}
 
 /**
  * Playhead time kept outside React state: the transport updates it every
@@ -637,16 +660,23 @@ function ArrangeEditor({
   const savedSnapshotRef = useRef("");
   const saveSeqRef = useRef(0);
 
+  const [playbackMode, setPlaybackMode] =
+    useState<PlaybackMode>(readPlaybackMode);
+  /** Audio for the clip under the playhead is taking a while to start. */
+  const [audioWaiting, setAudioWaiting] = useState(false);
+
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const voicesRef = useRef<Map<string, ActiveVoice>>(new Map());
-  /** Bumps when a clip's voice should be abandoned (seek / stop / superseded start). */
-  const voiceGenRef = useRef<Map<string, number>>(new Map());
-  /** Clip instances with a buffer decode / voice start already in flight. */
-  const voiceStartPendingRef = useRef<Set<string>>(new Set());
+  const playbackModeRef = useRef(playbackMode);
+  const engineRef = useRef<PlaybackEngine | null>(null);
+  /** Voices for the current and next clip instance, by instanceId. */
+  const slotsRef = useRef<Map<string, VoiceSlot>>(new Map());
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
   /** Previous sync playhead — large jumps mean the user seeked. */
   const lastSyncAtRef = useRef(0);
+  /** Frame timestamp since which the clip under the playhead waits for audio. */
+  const waitingSinceRef = useRef<number | null>(null);
+  const audioWaitingRef = useRef(false);
 
   const trackById = useMemo(() => {
     const m = new Map<string, Track>();
@@ -778,66 +808,103 @@ function ArrangeEditor({
     return audioCtxRef.current;
   }
 
-  function ensureTrackBuffer(trackId: string): Promise<AudioBuffer> {
-    const cached = trackBuffers.get(trackId);
-    if (cached) return Promise.resolve(cached);
-    const pending = trackBufferInflight.get(trackId);
-    if (pending) return pending;
-
-    const task = (async () => {
-      const res = await fetch(trackStreamUrl(trackId), {
-        credentials: "include",
-      });
-      if (!res.ok) {
-        throw new Error(`Failed to load audio (${res.status})`);
-      }
-      const raw = await res.arrayBuffer();
-      const ctx = ensureAudioCtx();
-      const buffer = await ctx.decodeAudioData(raw.slice(0));
-      trackBuffers.set(trackId, buffer);
-      return buffer;
-    })();
-
-    trackBufferInflight.set(trackId, task);
-    return task.finally(() => {
-      trackBufferInflight.delete(trackId);
-    });
+  function ensureEngine() {
+    const mode = playbackModeRef.current;
+    if (engineRef.current?.mode !== mode) {
+      releaseEngine();
+      engineRef.current = createPlaybackEngine(mode, ensureAudioCtx());
+    }
+    return engineRef.current;
   }
 
-  function stopVoice(voice: ActiveVoice) {
-    try {
-      voice.source.onended = null;
-      voice.source.stop();
-    } catch {
-      // already stopped
-    }
-    try {
-      voice.source.disconnect();
-    } catch {
-      // ignore
-    }
-    try {
-      voice.gainNode.disconnect();
-    } catch {
-      // ignore
+  function releaseSlot(slot: VoiceSlot) {
+    slot.gen += 1;
+    slot.voice.dispose();
+    slotsRef.current.delete(slot.instanceId);
+  }
+
+  function releaseAllSlots() {
+    for (const slot of [...slotsRef.current.values()]) releaseSlot(slot);
+  }
+
+  function releaseEngine() {
+    releaseAllSlots();
+    engineRef.current?.dispose();
+    engineRef.current = null;
+  }
+
+  /** Silence a slot but keep what it loaded; failed slots get another try. */
+  function stopSlot(slot: VoiceSlot) {
+    if (slot.state === "started") {
+      slot.gen += 1;
+      slot.voice.stop();
+      slot.state = "ready";
+    } else if (slot.state === "failed") {
+      slot.state = "idle";
     }
   }
 
   function stopAllVoices() {
-    for (const voice of voicesRef.current.values()) stopVoice(voice);
-    voicesRef.current.clear();
-    voiceStartPendingRef.current.clear();
-    for (const id of voiceGenRef.current.keys()) {
-      voiceGenRef.current.set(id, (voiceGenRef.current.get(id) ?? 0) + 1);
-    }
+    for (const slot of slotsRef.current.values()) stopSlot(slot);
   }
 
-  function bumpVoiceGen(instanceId: string) {
-    voiceGenRef.current.set(
-      instanceId,
-      (voiceGenRef.current.get(instanceId) ?? 0) + 1,
+  function ensureSlot(clip: ArrangementClip) {
+    const existing = slotsRef.current.get(clip.instanceId);
+    if (existing && existing.trackId === clip.trackId) return existing;
+    if (existing) releaseSlot(existing);
+    const slot: VoiceSlot = {
+      instanceId: clip.instanceId,
+      trackId: clip.trackId,
+      voice: ensureEngine().createVoice(clip.trackId),
+      state: "idle",
+      gen: 0,
+    };
+    slotsRef.current.set(clip.instanceId, slot);
+    return slot;
+  }
+
+  /** False once the slot was released or a newer load/start superseded `gen`. */
+  function isSlotCurrent(slot: VoiceSlot, gen: number) {
+    return slotsRef.current.get(slot.instanceId) === slot && slot.gen === gen;
+  }
+
+  function loadSlot(slot: VoiceSlot, offsetSec: number) {
+    const gen = ++slot.gen;
+    slot.state = "loading";
+    slot.voice.load(offsetSec).then(
+      () => {
+        // The next sync starts it from wherever the playhead is by then.
+        if (isSlotCurrent(slot, gen)) slot.state = "ready";
+      },
+      (err: unknown) => {
+        if (!isSlotCurrent(slot, gen)) return;
+        slot.state = "failed";
+        onError(err instanceof Error ? err.message : "Failed to load audio");
+      },
     );
-    voiceStartPendingRef.current.delete(instanceId);
+  }
+
+  function startSlot(
+    slot: VoiceSlot,
+    clip: ArrangementClip,
+    offsetSec: number,
+    durSec: number,
+    delaySec: number,
+  ) {
+    const gen = ++slot.gen;
+    slot.state = "started";
+    slot.voice.setGain(clip.gain);
+    slot.voice.start(offsetSec, durSec, delaySec).catch((err: unknown) => {
+      if (!isSlotCurrent(slot, gen)) return;
+      slot.state = "failed";
+      onError(err instanceof Error ? err.message : "Failed to play audio");
+    });
+  }
+
+  function setWaitingHint(value: boolean) {
+    if (audioWaitingRef.current === value) return;
+    audioWaitingRef.current = value;
+    setAudioWaiting(value);
   }
 
   function stopTransport() {
@@ -849,160 +916,134 @@ function ArrangeEditor({
       rafRef.current = null;
     }
     lastTsRef.current = null;
+    waitingSinceRef.current = null;
+    setWaitingHint(false);
     stopAllVoices();
   }
 
-  function syncAudio(at: number) {
+  /**
+   * Line voices up with the playhead: the clip under it plays, the next one
+   * loads and, once within LOOKAHEAD_SEC, is scheduled to start on time.
+   * Everything else is released.
+   */
+  function syncAudio(at: number, forceSeek = false) {
     if (!playRef.current) {
       stopAllVoices();
       return;
     }
 
-    const ctx = ensureAudioCtx();
-    const seeked = Math.abs(at - lastSyncAtRef.current) > SEEK_JUMP_SEC;
+    const seeked =
+      forceSeek || Math.abs(at - lastSyncAtRef.current) > SEEK_JUMP_SEC;
     lastSyncAtRef.current = at;
-    const active = new Set<string>();
+    if (seeked) stopAllVoices();
 
-    for (const seg of segsRef.current) {
-      if (seg.kind !== "audio") continue;
-      if (at < seg.arrStart || at >= seg.arrEnd) continue;
+    const segs = segsRef.current;
+    const soloEnd = soloEndRef.current;
+    const cur = audioSegAt(segs, at);
+    const next = segs.find(
+      (s) =>
+        s.kind === "audio" &&
+        s !== cur &&
+        s.arrStart >= at &&
+        (soloEnd == null || s.arrStart < soloEnd - 0.001),
+    );
+    const keep = new Set<string>();
+    let curSlot: VoiceSlot | null = null;
 
-      const clip = seg.clip;
-      active.add(clip.instanceId);
-
-      const remaining = seg.arrEnd - at;
-      if (remaining <= 0.001) continue;
-
-      const existing = voicesRef.current.get(clip.instanceId);
-      if (existing && existing.trackId === clip.trackId && !seeked) {
-        existing.gainNode.gain.value = clip.gain;
-        continue;
-      }
-      if (existing) {
-        bumpVoiceGen(clip.instanceId);
-        stopVoice(existing);
-        voicesRef.current.delete(clip.instanceId);
-      }
-
-      // Decode / start already in flight for this clip — wait for it.
-      if (voiceStartPendingRef.current.has(clip.instanceId)) {
-        // Seek while loading: drop the stale start and kick a new one.
-        if (!seeked) continue;
-        bumpVoiceGen(clip.instanceId);
-      }
-
-      const gen = (voiceGenRef.current.get(clip.instanceId) ?? 0) + 1;
-      voiceGenRef.current.set(clip.instanceId, gen);
-      voiceStartPendingRef.current.add(clip.instanceId);
-
-      void ensureTrackBuffer(clip.trackId)
-        .then(async (buffer) => {
-          if (voiceGenRef.current.get(clip.instanceId) !== gen) return;
-          if (!playRef.current) return;
-
-          await ctx.resume();
-          if (voiceGenRef.current.get(clip.instanceId) !== gen) return;
-          if (!playRef.current) return;
-
-          const nowAt = playhead.get();
-          const still = segsRef.current.find(
-            (s) =>
-              s.kind === "audio" &&
-              s.clip.instanceId === clip.instanceId &&
-              nowAt >= s.arrStart &&
-              nowAt < s.arrEnd,
-          );
-          if (!still) return;
-
-          const prev = voicesRef.current.get(clip.instanceId);
-          if (prev) {
-            stopVoice(prev);
-            voicesRef.current.delete(clip.instanceId);
-          }
-
-          const offset = Math.max(
-            0,
-            Math.min(
-              still.clip.inSec + (nowAt - still.arrStart),
-              Math.max(0, buffer.duration - 0.001),
-            ),
-          );
-          const dur = Math.min(
-            still.arrEnd - nowAt,
-            Math.max(0, buffer.duration - offset),
-          );
-          if (dur <= 0.001) return;
-
-          const gainNode = ctx.createGain();
-          gainNode.gain.value = still.clip.gain;
-          gainNode.connect(ctx.destination);
-
-          const source = ctx.createBufferSource();
-          source.buffer = buffer;
-          source.connect(gainNode);
-          const ctxStart = ctx.currentTime;
-          source.onended = () => {
-            const cur = voicesRef.current.get(clip.instanceId);
-            if (cur?.source === source) {
-              voicesRef.current.delete(clip.instanceId);
-            }
-          };
-          source.start(ctxStart, offset, dur);
-          voicesRef.current.set(clip.instanceId, {
-            instanceId: clip.instanceId,
-            trackId: clip.trackId,
-            source,
-            gainNode,
-            ctxStart,
-            bufferOffset: offset,
-          });
-        })
-        .catch((err) => {
-          if (voiceGenRef.current.get(clip.instanceId) !== gen) return;
-          onError(
-            err instanceof Error ? err.message : "Failed to decode audio",
-          );
-        })
-        .finally(() => {
-          if (voiceGenRef.current.get(clip.instanceId) === gen) {
-            voiceStartPendingRef.current.delete(clip.instanceId);
-          }
-        });
-    }
-
-    for (const [id, voice] of voicesRef.current) {
-      if (!active.has(id)) {
-        bumpVoiceGen(id);
-        stopVoice(voice);
-        voicesRef.current.delete(id);
+    if (cur && cur.arrEnd - at > 0.001) {
+      keep.add(cur.clip.instanceId);
+      const slot = (curSlot = ensureSlot(cur.clip));
+      const offset = cur.clip.inSec + (at - cur.arrStart);
+      if (slot.state === "idle") {
+        loadSlot(slot, offset);
+      } else if (slot.state === "ready") {
+        startSlot(slot, cur.clip, offset, cur.arrEnd - at, 0);
+      } else if (slot.state === "started") {
+        slot.voice.setGain(cur.clip.gain);
       }
     }
-    for (const id of [...voiceStartPendingRef.current]) {
-      if (!active.has(id)) bumpVoiceGen(id);
+
+    if (next) {
+      keep.add(next.clip.instanceId);
+      const slot = ensureSlot(next.clip);
+      const delay = next.arrStart - at;
+      // Let the clip under the playhead load first.
+      if (slot.state === "idle" && (!curSlot || curSlot.state === "started")) {
+        loadSlot(slot, next.clip.inSec);
+      } else if (slot.state === "ready" && delay <= LOOKAHEAD_SEC) {
+        startSlot(
+          slot,
+          next.clip,
+          next.clip.inSec,
+          next.arrEnd - next.arrStart,
+          delay,
+        );
+      }
+    }
+
+    for (const slot of [...slotsRef.current.values()]) {
+      if (!keep.has(slot.instanceId)) releaseSlot(slot);
+    }
+  }
+
+  /**
+   * Playhead for this frame. Inside a clip it follows that clip's audio and
+   * holds while the audio loads; in pauses (or after a failure) it runs on
+   * the frame clock.
+   */
+  function advancePlayhead(at: number, dt: number, ts: number) {
+    let next = at + dt;
+    let waiting = false;
+    const seg = audioSegAt(segsRef.current, at);
+    if (seg) {
+      const slot = slotsRef.current.get(seg.clip.instanceId);
+      const started = slot?.state === "started";
+      const pos = started ? slot.voice.sourcePosition() : null;
+      if (pos != null) {
+        next = Math.max(at, seg.arrStart + (pos - seg.clip.inSec));
+      } else if (slot?.state !== "failed" && !(started && slot.voice.ended())) {
+        next = at;
+        waiting = true;
+      }
+    }
+    if (!waiting) waitingSinceRef.current = null;
+    else waitingSinceRef.current ??= ts;
+    setWaitingHint(
+      waitingSinceRef.current != null &&
+        ts - waitingSinceRef.current > WAITING_HINT_MS,
+    );
+    return next;
+  }
+
+  function changePlaybackMode(mode: PlaybackMode) {
+    if (mode === playbackModeRef.current) return;
+    stopTransport();
+    releaseEngine();
+    playbackModeRef.current = mode;
+    setPlaybackMode(mode);
+    try {
+      localStorage.setItem(PLAYBACK_MODE_KEY, mode);
+    } catch {
+      // ignore
     }
   }
 
   useEffect(() => {
     return () => {
-      stopAllVoices();
+      releaseEngine();
       void audioCtxRef.current?.close();
       audioCtxRef.current = null;
     };
   }, []);
 
-  // Keep gain nodes in sync; drop voices for removed clips.
+  // Keep gains in sync; drop voices for removed clips.
   useEffect(() => {
     const alive = new Set(clips.map((c) => c.instanceId));
-    for (const [id, voice] of voicesRef.current) {
-      if (!alive.has(id)) {
-        bumpVoiceGen(id);
-        stopVoice(voice);
-        voicesRef.current.delete(id);
-      }
+    for (const slot of [...slotsRef.current.values()]) {
+      if (!alive.has(slot.instanceId)) releaseSlot(slot);
     }
     for (const clip of clips) {
-      const voice = voicesRef.current.get(clip.instanceId);
-      if (voice) voice.gainNode.gain.value = clip.gain;
+      slotsRef.current.get(clip.instanceId)?.voice.setGain(clip.gain);
     }
   }, [clips]);
 
@@ -1010,16 +1051,6 @@ function ArrangeEditor({
     () => [...new Set(clips.map((c) => c.trackId))].sort().join(","),
     [clips],
   );
-
-  // Warm decoded buffers for clips in the arrangement.
-  useEffect(() => {
-    if (!peakTrackKey) return;
-    const ids = peakTrackKey.split(",").filter(Boolean);
-    for (const id of ids) {
-      void ensureTrackBuffer(id).catch(() => undefined);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [peakTrackKey]);
 
   useEffect(() => {
     if (!playing) {
@@ -1036,7 +1067,7 @@ function ArrangeEditor({
       if (lastTsRef.current == null) lastTsRef.current = ts;
       const dt = Math.min(0.1, (ts - lastTsRef.current) / 1000);
       lastTsRef.current = ts;
-      const next = playhead.get() + dt;
+      const next = advancePlayhead(playhead.get(), dt, ts);
       const soloEnd = soloEndRef.current;
       if (soloEnd != null && next >= soloEnd) {
         setPlayheadSec(soloEnd);
@@ -1054,7 +1085,7 @@ function ArrangeEditor({
       rafRef.current = requestAnimationFrame(tick);
     };
     void ensureAudioCtx().resume();
-    syncAudio(playhead.get());
+    syncAudio(playhead.get(), true);
     rafRef.current = requestAnimationFrame(tick);
     return () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
@@ -1245,7 +1276,7 @@ function ArrangeEditor({
   function seekToArrangement(at: number) {
     const clamped = Math.max(0, Math.min(totalSec, at));
     setPlayheadSec(clamped);
-    syncAudio(clamped);
+    syncAudio(clamped, true);
   }
 
   /** Play full arrangement from current playhead (clears solo). */
@@ -1278,7 +1309,7 @@ function ArrangeEditor({
     if (!playing) {
       setPlaying(true);
     } else {
-      syncAudio(seg.arrStart);
+      syncAudio(seg.arrStart, true);
     }
   }
 
@@ -1329,6 +1360,31 @@ function ArrangeEditor({
         >
           {playing ? "stop" : "play"}
         </button>
+        <span className="arr-mode-toggle" role="group" aria-label="Playback mode">
+          {PLAYBACK_MODES.map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={
+                playbackMode === m
+                  ? "filterButton filterSelected"
+                  : "filterButton"
+              }
+              aria-pressed={playbackMode === m}
+              title={
+                m === "stream"
+                  ? "Stream audio (light; transitions within ~50 ms)"
+                  : "Decode current and next clip (gapless; waits to load)"
+              }
+              onClick={() => changePlaybackMode(m)}
+            >
+              {m}
+            </button>
+          ))}
+        </span>
+        {playing && audioWaiting && (
+          <span className="arr-muted">loading…</span>
+        )}
         <button
           type="button"
           className="filterButton"
