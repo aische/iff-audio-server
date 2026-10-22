@@ -172,6 +172,7 @@ app.get("/tracks", async (request, reply) => {
       present: tracks.present,
       sizeBytes: tracks.sizeBytes,
       durationSeconds: tracks.durationSeconds,
+      releasedOn: tracks.releasedOn,
       mtime: tracks.mtime,
       createdAt: tracks.createdAt,
       updatedAt: tracks.updatedAt,
@@ -216,6 +217,58 @@ app.get("/tracks", async (request, reply) => {
     comments: byTrack.get(track.id) ?? [],
   }));
 });
+
+/** Set or clear the release label. Empty / null clears it. */
+app.patch<{
+  Params: { id: string };
+  Body: { releasedOn?: string | null };
+}>("/tracks/:id", async (request, reply) => {
+  const userId = requireUser(request);
+  if (!userId) return reply.code(401).send({ error: "unauthorized" });
+
+  const raw = request.body?.releasedOn;
+  if (raw !== null && typeof raw !== "string") {
+    return reply.code(400).send({ error: "releasedOn required" });
+  }
+  const releasedOn = raw?.trim() || null;
+
+  const [row] = await db
+    .update(tracks)
+    .set({ releasedOn, updatedAt: new Date() })
+    .where(eq(tracks.id, request.params.id))
+    .returning({
+      id: tracks.id,
+      releasedOn: tracks.releasedOn,
+      updatedAt: tracks.updatedAt,
+    });
+  if (!row) return reply.code(404).send({ error: "not found" });
+
+  return row;
+});
+
+app.get<{ Params: { id: string } }>(
+  "/tracks/:id/peaks",
+  async (request, reply) => {
+    const userId = requireUser(request);
+    if (!userId) return reply.code(401).send({ error: "unauthorized" });
+
+    const [track] = await db
+      .select({
+        peaks: tracks.peaks,
+        durationSeconds: tracks.durationSeconds,
+      })
+      .from(tracks)
+      .where(eq(tracks.id, request.params.id))
+      .limit(1);
+
+    if (!track) return reply.code(404).send({ error: "not found" });
+    if (!track.peaks || track.durationSeconds == null) {
+      return reply.code(404).send({ error: "peaks not computed" });
+    }
+
+    return { peaks: track.peaks, durationSec: track.durationSeconds };
+  },
+);
 
 app.get<{ Params: { id: string } }>(
   "/tracks/:id/download",

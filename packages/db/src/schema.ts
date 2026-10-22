@@ -7,6 +7,7 @@ import {
   boolean,
   integer,
   jsonb,
+  real,
   unique,
 } from "drizzle-orm/pg-core";
 
@@ -26,6 +27,10 @@ export const tracks = pgTable("tracks", {
   sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
   /** Whole seconds; null until backfilled / probed. */
   durationSeconds: integer("duration_seconds"),
+  /** Overview waveform (max abs per bin, 0..1); null until computed by sync. */
+  peaks: real("peaks").array(),
+  /** Release label this track was published on (free text); null = unreleased. */
+  releasedOn: text("released_on"),
   mtime: timestamp("mtime", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()

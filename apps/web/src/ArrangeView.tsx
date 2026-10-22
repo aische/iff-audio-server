@@ -312,11 +312,15 @@ function ClipWaveform({
 export function ArrangeShell({
   user,
   tracks,
+  hideReleased,
+  onHideReleasedChange,
   onBack,
   onError,
 }: {
   user: User;
   tracks: Track[];
+  hideReleased: boolean;
+  onHideReleasedChange: (value: boolean) => void;
   onBack: () => void;
   onError: (message: string | null) => void;
 }) {
@@ -379,6 +383,8 @@ export function ArrangeShell({
         arrangementId={activeId}
         user={user}
         tracks={tracks}
+        hideReleased={hideReleased}
+        onHideReleasedChange={onHideReleasedChange}
         onBack={() => {
           setActiveId(null);
           void refresh();
@@ -524,6 +530,8 @@ function ArrangeEditor({
   arrangementId,
   user,
   tracks,
+  hideReleased,
+  onHideReleasedChange,
   onBack,
   onOpen,
   onCloseAll,
@@ -532,6 +540,8 @@ function ArrangeEditor({
   arrangementId: string;
   user: User;
   tracks: Track[];
+  hideReleased: boolean;
+  onHideReleasedChange: (value: boolean) => void;
   onBack: () => void;
   onOpen: (id: string) => void;
   onCloseAll: () => void;
@@ -1047,6 +1057,7 @@ function ArrangeEditor({
 
   const sidebarTracks = tracks.filter((t) => {
     if (!t.present) return false;
+    if (hideReleased && t.releasedOn) return false;
     if (filter === "commented" && t.comments.length === 0) return false;
     if (tagFilter) {
       const tags = unifiedTags(t.comments.map((c) => c.body));
@@ -1349,6 +1360,16 @@ function ArrangeEditor({
                 {label}
               </button>
             ))}
+            <button
+              type="button"
+              className={
+                hideReleased ? "filterButton filterSelected" : "filterButton"
+              }
+              onClick={() => onHideReleasedChange(!hideReleased)}
+              title="Hide tracks that already have a release label"
+            >
+              {hideReleased ? "rel hidden" : "rel shown"}
+            </button>
             <span className="arr-muted">{sidebarTracks.length}</span>
             {tagFilter && (
               <button

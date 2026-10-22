@@ -43,6 +43,13 @@
       "when": 1791571707959,
       "tag": "0005_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792667679440,
+      "tag": "0006_peaks_released",
+      "breakpoints": true
     }
   ]
 }
