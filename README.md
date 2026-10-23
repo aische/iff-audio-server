@@ -106,11 +106,11 @@ curl http://localhost:3000/health
 There is no registration or browser upload. Use these CLIs (require `DATABASE_URL`; sync/rename also require `LIBRARY_PATH`):
 
 ```bash
-# Create a user
-npm run create-user -w api -- you@example.com 'your-password'
+# Create a user (prompts for the password, or reads the first line of stdin)
+npm run create-user -w api -- you@example.com
 
 # Reset an existing user's password (errors if the user does not exist)
-npm run create-user -w api -- you@example.com 'new-password' --reset
+npm run create-user -w api -- you@example.com --reset
 
 # Upsert tracks from the library folder (never deletes DB rows)
 npm run sync-library -w api

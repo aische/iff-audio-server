@@ -24,9 +24,9 @@ remote_kubectl -n iff-audio run iff-rename-track --rm -it --restart=Never \
     \"spec\": {
       \"containers\": [{
         \"name\": \"iff-rename-track\",
-        \"image\": \"$IMAGE\",
+        \"image\": $(json_string "$IMAGE"),
         \"workingDir\": \"/app\",
-        \"command\": [\"npm\", \"run\", \"rename-track\", \"-w\", \"api\", \"--\", \"$OLD\", \"$NEW\"],
+        \"command\": [\"npm\", \"run\", \"rename-track\", \"-w\", \"api\", \"--\", $(json_string "$OLD"), $(json_string "$NEW")],
         \"env\": [
           {\"name\": \"LIBRARY_PATH\", \"value\": \"/library\"}
         ],

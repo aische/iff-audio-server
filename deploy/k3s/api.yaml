@@ -13,6 +13,18 @@ spec:
       labels:
         app: iff-api
     spec:
+      # Migrations run before the new API code starts (drizzle-kit skips applied ones).
+      initContainers:
+        - name: migrate
+          image: iff-api:local
+          workingDir: /app
+          command: ["npm", "run", "migrate", "-w", "@iff/db"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: iff-api
+                  key: DATABASE_URL
       containers:
         - name: api
           image: iff-api:local

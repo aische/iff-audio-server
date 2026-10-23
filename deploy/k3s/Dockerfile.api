@@ -8,7 +8,7 @@ COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY packages/db/package.json packages/db/
 
-# tsx + drizzle-kit are needed at runtime for the API and migrate Job
+# tsx + drizzle-kit are needed at runtime for the API and migrate initContainer
 RUN npm ci --workspace=api --workspace=@iff/db --include-workspace-root
 
 FROM node:22-alpine

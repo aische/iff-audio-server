@@ -103,16 +103,13 @@ export DEPLOY_HOST=you@your-server
 npm run deploy:k3s:apply
 ```
 
-Applies namespace + `site.yaml` + the stack over SSH (stamps `@BASE_PATH@` in `web.yaml` from the web Ingress path).
+Applies namespace + `site.yaml` + the stack over SSH (stamps `@BASE_PATH@` in `web.yaml` and `api.yaml` from the web Ingress path).
 
 ---
 
-## 4. Migrate the database
+## 4. Database migrations
 
-```bash
-export DEPLOY_HOST=you@your-server
-MIGRATE=1 npm run deploy:k3s:apply
-```
+Nothing to run: the API pod has a `migrate` initContainer that applies pending migrations before the API starts, on every rollout. `deploy:k3s:apply` prints its log at the end; if the API pod is stuck in `Init`, check `kubectl -n iff-audio logs deploy/iff-api -c migrate`.
 
 ---
 
@@ -120,11 +117,13 @@ MIGRATE=1 npm run deploy:k3s:apply
 
 ```bash
 export DEPLOY_HOST=you@your-server
-./deploy/k3s/create-user.sh you@example.com 'your-password'
+./deploy/k3s/create-user.sh you@example.com
 
 # Reset an existing user's password
-./deploy/k3s/create-user.sh you@example.com 'new-password' --reset
+./deploy/k3s/create-user.sh you@example.com --reset
 ```
+
+The script prompts for the password (or reads the first line of stdin) and pipes it into the pod, so it never appears in the pod spec, `ps` or shell history.
 
 ---
 
@@ -187,9 +186,8 @@ export DEPLOY_HOST=you@your-server
 
 npm run deploy:k3s:upload
 npm run deploy:k3s:apply
-# MIGRATE=1 npm run deploy:k3s:apply
 ```
 
-After schema changes, use `MIGRATE=1`. After adding/removing MP3s on the host folder, re-run sync (step 6).
+Schema changes are migrated automatically (step 4). After adding/removing MP3s on the host folder, re-run sync (step 6).
 
 Local development: see [README.md](./README.md).
