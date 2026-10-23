@@ -1,10 +1,11 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { access } from "node:fs/promises";
-import Fastify from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import session from "@fastify/session";
+import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import bcrypt from "bcrypt";
 import dotenv from "dotenv";
@@ -34,6 +35,10 @@ const libraryPath = requireLibraryPath();
 const corsOrigin = process.env.CORS_ORIGIN?.trim() || undefined;
 const cookieSecure = process.env.COOKIE_SECURE === "true";
 const trustProxy = process.env.TRUST_PROXY === "true" || cookieSecure;
+// Public path of the API (e.g. /apppath/api) so the cookie isn't sent to co-hosted apps.
+// Set per session on login, not as the plugin's cookie.path: the plugin skips requests
+// whose URL doesn't start with that path, and the Ingress strips the prefix.
+const cookiePath = process.env.COOKIE_PATH?.trim() || "/";
 
 const db = createDb(process.env.DATABASE_URL);
 const app = Fastify({ logger: true, trustProxy });
@@ -50,6 +55,7 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 await app.register(cookie);
 await app.register(session, {
   secret: process.env.SESSION_SECRET,
+  cookieName: "iff_sid",
   // Only persist sessions that hold data (i.e. after login), not every probe/bot hit.
   saveUninitialized: false,
   store: createSessionStore(db, {
@@ -63,6 +69,43 @@ await app.register(session, {
     maxAge: SESSION_TTL_MS,
   },
 });
+
+// Only routes that run a bcrypt compare are limited (brute force + CPU cost).
+await app.register(rateLimit, { global: false });
+
+/**
+ * preHandler limiting requests per key. Uses createRateLimit because
+ * app.rateLimit() handlers only run once per request, so two can't be stacked.
+ */
+function limitBy(
+  max: number,
+  timeWindow: string,
+  keyGenerator: (request: FastifyRequest) => string,
+) {
+  const limiter = app.createRateLimit({ max, timeWindow, keyGenerator });
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const result = await limiter(request);
+    if (!result.isAllowed && result.isExceeded) {
+      return reply
+        .code(429)
+        .header("retry-after", result.ttlInSeconds)
+        .send({ error: "too many attempts, try again later" });
+    }
+  };
+}
+
+const loginLimitByIp = limitBy(20, "1 minute", (request) => `ip:${request.ip}`);
+const loginLimitByEmail = limitBy(10, "15 minutes", (request) => {
+  const email = (request.body as { email?: unknown } | undefined)?.email;
+  return typeof email === "string"
+    ? `email:${email.trim().toLowerCase()}`
+    : `ip:${request.ip}`;
+});
+const changePasswordLimit = limitBy(
+  10,
+  "15 minutes",
+  (request) => `user:${request.session.userId ?? request.ip}`,
+);
 
 // Only for reply.sendFile (Range/ETag/Content-Length); routes stay behind auth.
 await app.register(fastifyStatic, { root: libraryPath, serve: false });
@@ -90,25 +133,32 @@ app.get("/health", async () => ({ ok: true }));
 
 app.post<{
   Body: { email?: string; password?: string };
-}>("/auth/login", async (request, reply) => {
-  const email = request.body?.email?.trim().toLowerCase();
-  const password = request.body?.password;
-  if (!email || !password) {
-    return reply.code(400).send({ error: "email and password required" });
-  }
+}>(
+  "/auth/login",
+  { preHandler: [loginLimitByIp, loginLimitByEmail] },
+  async (request, reply) => {
+    const email = request.body?.email?.trim().toLowerCase();
+    const password = request.body?.password;
+    if (!email || !password) {
+      return reply.code(400).send({ error: "email and password required" });
+    }
 
-  const [user] = await db
-    .select()
-    .from(users)
-    .where(eq(users.email, email))
-    .limit(1);
-  if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-    return reply.code(401).send({ error: "invalid credentials" });
-  }
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+      return reply.code(401).send({ error: "invalid credentials" });
+    }
 
-  request.session.userId = user.id;
-  return { id: user.id, email: user.email };
-});
+    // New session id on login (prevents session fixation).
+    await request.session.regenerate();
+    request.session.options({ path: cookiePath });
+    request.session.userId = user.id;
+    return { id: user.id, email: user.email };
+  },
+);
 
 app.post("/auth/logout", async (request, reply) => {
   await request.session.destroy();
@@ -131,35 +181,39 @@ app.get("/auth/me", async (request, reply) => {
 
 app.post<{
   Body: { currentPassword?: string; newPassword?: string };
-}>("/auth/change-password", async (request, reply) => {
-  const userId = requireUser(request);
-  if (!userId) return reply.code(401).send({ error: "unauthorized" });
+}>(
+  "/auth/change-password",
+  { preHandler: changePasswordLimit },
+  async (request, reply) => {
+    const userId = requireUser(request);
+    if (!userId) return reply.code(401).send({ error: "unauthorized" });
 
-  const { currentPassword, newPassword } = request.body ?? {};
-  if (!currentPassword || !newPassword) {
-    return reply
-      .code(400)
-      .send({ error: "currentPassword and newPassword required" });
-  }
-  if (newPassword.length < 8) {
-    return reply
-      .code(400)
-      .send({ error: "newPassword must be at least 8 characters" });
-  }
+    const { currentPassword, newPassword } = request.body ?? {};
+    if (!currentPassword || !newPassword) {
+      return reply
+        .code(400)
+        .send({ error: "currentPassword and newPassword required" });
+    }
+    if (newPassword.length < 8) {
+      return reply
+        .code(400)
+        .send({ error: "newPassword must be at least 8 characters" });
+    }
 
-  const [user] = await db
-    .select()
-    .from(users)
-    .where(eq(users.id, userId))
-    .limit(1);
-  if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
-    return reply.code(401).send({ error: "invalid current password" });
-  }
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+      return reply.code(401).send({ error: "invalid current password" });
+    }
 
-  const passwordHash = await bcrypt.hash(newPassword, 12);
-  await db.update(users).set({ passwordHash }).where(eq(users.id, userId));
-  return reply.code(204).send();
-});
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await db.update(users).set({ passwordHash }).where(eq(users.id, userId));
+    return reply.code(204).send();
+  },
+);
 
 app.get("/tracks", async (request, reply) => {
   const userId = requireUser(request);

@@ -32,7 +32,7 @@ require_site() {
   site_validate_paths deploy/k3s/site.yaml
 }
 
-# Substitute @BASE_PATH@ in web.yaml into a staging dir for rsync/apply.
+# Substitute @BASE_PATH@ in web.yaml / api.yaml into a staging dir for rsync/apply.
 stage_manifests() {
   local dest="$1"
   local base="$2"
@@ -41,8 +41,8 @@ stage_manifests() {
   local f
   for f in deploy/k3s/*.yaml; do
     case "$(basename "$f")" in
-      web.yaml)
-        sed "s|@BASE_PATH@|${base}|g" "$f" >"${dest}/web.yaml"
+      web.yaml | api.yaml)
+        sed "s|@BASE_PATH@|${base}|g" "$f" >"${dest}/$(basename "$f")"
         ;;
       *)
         cp "$f" "$dest/"

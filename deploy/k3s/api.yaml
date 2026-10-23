@@ -38,6 +38,9 @@ spec:
                 secretKeyRef:
                   name: iff-api
                   key: COOKIE_SECURE
+            # Public API prefix; @BASE_PATH@ is substituted by deploy.sh.
+            - name: COOKIE_PATH
+              value: "@BASE_PATH@/api"
           volumeMounts:
             - name: library
               mountPath: /library

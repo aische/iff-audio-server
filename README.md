@@ -34,6 +34,7 @@ MP3s live in a flat folder configured by `LIBRARY_PATH`. A sync CLI upserts trac
    | `CORS_ORIGIN`    | API             | If set, enables CORS for that origin (local Vite). Leave unset for same-origin prod   |
    | `COOKIE_SECURE`  | API             | `true` behind HTTPS so session cookies are marked Secure                              |
    | `TRUST_PROXY`    | API             | Optional. Defaults on when `COOKIE_SECURE=true` (TLS terminated at Apache/Ingress)    |
+   | `COOKIE_PATH`    | API             | Optional. Public API path for the session cookie (default `/`). k3s sets `<base>/api` |
 
    Local defaults:
 
