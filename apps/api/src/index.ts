@@ -1,10 +1,15 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { access } from "node:fs/promises";
-import Fastify from "fastify";
+import Fastify, {
+  type FastifyError,
+  type FastifyReply,
+  type FastifyRequest,
+} from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import session from "@fastify/session";
+import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import bcrypt from "bcrypt";
 import dotenv from "dotenv";
@@ -34,6 +39,10 @@ const libraryPath = requireLibraryPath();
 const corsOrigin = process.env.CORS_ORIGIN?.trim() || undefined;
 const cookieSecure = process.env.COOKIE_SECURE === "true";
 const trustProxy = process.env.TRUST_PROXY === "true" || cookieSecure;
+// Public path of the API (e.g. /apppath/api) so the cookie isn't sent to co-hosted apps.
+// Set per session on login, not as the plugin's cookie.path: the plugin skips requests
+// whose URL doesn't start with that path, and the Ingress strips the prefix.
+const cookiePath = process.env.COOKIE_PATH?.trim() || "/";
 
 const db = createDb(process.env.DATABASE_URL);
 const app = Fastify({ logger: true, trustProxy });
@@ -50,6 +59,7 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 await app.register(cookie);
 await app.register(session, {
   secret: process.env.SESSION_SECRET,
+  cookieName: "iff_sid",
   // Only persist sessions that hold data (i.e. after login), not every probe/bot hit.
   saveUninitialized: false,
   store: createSessionStore(db, {
@@ -63,6 +73,43 @@ await app.register(session, {
     maxAge: SESSION_TTL_MS,
   },
 });
+
+// Only routes that run a bcrypt compare are limited (brute force + CPU cost).
+await app.register(rateLimit, { global: false });
+
+/**
+ * preHandler limiting requests per key. Uses createRateLimit because
+ * app.rateLimit() handlers only run once per request, so two can't be stacked.
+ */
+function limitBy(
+  max: number,
+  timeWindow: string,
+  keyGenerator: (request: FastifyRequest) => string,
+) {
+  const limiter = app.createRateLimit({ max, timeWindow, keyGenerator });
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const result = await limiter(request);
+    if (!result.isAllowed && result.isExceeded) {
+      return reply
+        .code(429)
+        .header("retry-after", result.ttlInSeconds)
+        .send({ error: "too many attempts, try again later" });
+    }
+  };
+}
+
+const loginLimitByIp = limitBy(20, "1 minute", (request) => `ip:${request.ip}`);
+const loginLimitByEmail = limitBy(10, "15 minutes", (request) => {
+  const email = (request.body as { email?: unknown } | undefined)?.email;
+  return typeof email === "string"
+    ? `email:${email.trim().toLowerCase()}`
+    : `ip:${request.ip}`;
+});
+const changePasswordLimit = limitBy(
+  10,
+  "15 minutes",
+  (request) => `user:${request.session.userId ?? request.ip}`,
+);
 
 // Only for reply.sendFile (Range/ETag/Content-Length); routes stay behind auth.
 await app.register(fastifyStatic, { root: libraryPath, serve: false });
@@ -86,29 +133,74 @@ function requireUser(request: { session: { userId?: string } }) {
   return request.session.userId ?? null;
 }
 
+// Validation errors → 400 with the ajv message; 5xx details stay in the log.
+app.setErrorHandler<FastifyError>((error, request, reply) => {
+  if (error.validation) {
+    return reply.code(400).send({ error: error.message });
+  }
+  const status = error.statusCode ?? 500;
+  if (status >= 500) {
+    request.log.error(error);
+    return reply.code(500).send({ error: "internal error" });
+  }
+  return reply.code(status).send({ error: error.message });
+});
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const idParams = {
+  type: "object",
+  required: ["id"],
+  properties: { id: { type: "string", format: "uuid" } },
+} as const;
+
+/** Body object whose listed properties are optional but typed (handlers report missing ones). */
+function bodyOf(properties: Record<string, object>) {
+  return { type: "object", properties } as const;
+}
+
+const passwordField = { type: "string", maxLength: 1024 };
+const arrangementName = { type: "string", maxLength: 200 };
+
 app.get("/health", async () => ({ ok: true }));
 
 app.post<{
   Body: { email?: string; password?: string };
-}>("/auth/login", async (request, reply) => {
-  const email = request.body?.email?.trim().toLowerCase();
-  const password = request.body?.password;
-  if (!email || !password) {
-    return reply.code(400).send({ error: "email and password required" });
-  }
+}>(
+  "/auth/login",
+  {
+    schema: {
+      body: bodyOf({
+        email: { type: "string", maxLength: 254 },
+        password: passwordField,
+      }),
+    },
+    preHandler: [loginLimitByIp, loginLimitByEmail],
+  },
+  async (request, reply) => {
+    const email = request.body?.email?.trim().toLowerCase();
+    const password = request.body?.password;
+    if (!email || !password) {
+      return reply.code(400).send({ error: "email and password required" });
+    }
 
-  const [user] = await db
-    .select()
-    .from(users)
-    .where(eq(users.email, email))
-    .limit(1);
-  if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-    return reply.code(401).send({ error: "invalid credentials" });
-  }
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+      return reply.code(401).send({ error: "invalid credentials" });
+    }
 
-  request.session.userId = user.id;
-  return { id: user.id, email: user.email };
-});
+    // New session id on login (prevents session fixation).
+    await request.session.regenerate();
+    request.session.options({ path: cookiePath });
+    request.session.userId = user.id;
+    return { id: user.id, email: user.email };
+  },
+);
 
 app.post("/auth/logout", async (request, reply) => {
   await request.session.destroy();
@@ -131,35 +223,47 @@ app.get("/auth/me", async (request, reply) => {
 
 app.post<{
   Body: { currentPassword?: string; newPassword?: string };
-}>("/auth/change-password", async (request, reply) => {
-  const userId = requireUser(request);
-  if (!userId) return reply.code(401).send({ error: "unauthorized" });
+}>(
+  "/auth/change-password",
+  {
+    schema: {
+      body: bodyOf({
+        currentPassword: passwordField,
+        newPassword: passwordField,
+      }),
+    },
+    preHandler: changePasswordLimit,
+  },
+  async (request, reply) => {
+    const userId = requireUser(request);
+    if (!userId) return reply.code(401).send({ error: "unauthorized" });
 
-  const { currentPassword, newPassword } = request.body ?? {};
-  if (!currentPassword || !newPassword) {
-    return reply
-      .code(400)
-      .send({ error: "currentPassword and newPassword required" });
-  }
-  if (newPassword.length < 8) {
-    return reply
-      .code(400)
-      .send({ error: "newPassword must be at least 8 characters" });
-  }
+    const { currentPassword, newPassword } = request.body ?? {};
+    if (!currentPassword || !newPassword) {
+      return reply
+        .code(400)
+        .send({ error: "currentPassword and newPassword required" });
+    }
+    if (newPassword.length < 8) {
+      return reply
+        .code(400)
+        .send({ error: "newPassword must be at least 8 characters" });
+    }
 
-  const [user] = await db
-    .select()
-    .from(users)
-    .where(eq(users.id, userId))
-    .limit(1);
-  if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
-    return reply.code(401).send({ error: "invalid current password" });
-  }
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+      return reply.code(401).send({ error: "invalid current password" });
+    }
 
-  const passwordHash = await bcrypt.hash(newPassword, 12);
-  await db.update(users).set({ passwordHash }).where(eq(users.id, userId));
-  return reply.code(204).send();
-});
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await db.update(users).set({ passwordHash }).where(eq(users.id, userId));
+    return reply.code(204).send();
+  },
+);
 
 app.get("/tracks", async (request, reply) => {
   const userId = requireUser(request);
@@ -222,32 +326,44 @@ app.get("/tracks", async (request, reply) => {
 app.patch<{
   Params: { id: string };
   Body: { releasedOn?: string | null };
-}>("/tracks/:id", async (request, reply) => {
-  const userId = requireUser(request);
-  if (!userId) return reply.code(401).send({ error: "unauthorized" });
+}>(
+  "/tracks/:id",
+  {
+    schema: {
+      params: idParams,
+      body: bodyOf({
+        releasedOn: { type: ["string", "null"], maxLength: 100 },
+      }),
+    },
+  },
+  async (request, reply) => {
+    const userId = requireUser(request);
+    if (!userId) return reply.code(401).send({ error: "unauthorized" });
 
-  const raw = request.body?.releasedOn;
-  if (raw !== null && typeof raw !== "string") {
-    return reply.code(400).send({ error: "releasedOn required" });
-  }
-  const releasedOn = raw?.trim() || null;
+    const raw = request.body?.releasedOn;
+    if (raw !== null && typeof raw !== "string") {
+      return reply.code(400).send({ error: "releasedOn required" });
+    }
+    const releasedOn = raw?.trim() || null;
 
-  const [row] = await db
-    .update(tracks)
-    .set({ releasedOn, updatedAt: new Date() })
-    .where(eq(tracks.id, request.params.id))
-    .returning({
-      id: tracks.id,
-      releasedOn: tracks.releasedOn,
-      updatedAt: tracks.updatedAt,
-    });
-  if (!row) return reply.code(404).send({ error: "not found" });
+    const [row] = await db
+      .update(tracks)
+      .set({ releasedOn, updatedAt: new Date() })
+      .where(eq(tracks.id, request.params.id))
+      .returning({
+        id: tracks.id,
+        releasedOn: tracks.releasedOn,
+        updatedAt: tracks.updatedAt,
+      });
+    if (!row) return reply.code(404).send({ error: "not found" });
 
-  return row;
-});
+    return row;
+  },
+);
 
 app.get<{ Params: { id: string } }>(
   "/tracks/:id/peaks",
+  { schema: { params: idParams } },
   async (request, reply) => {
     const userId = requireUser(request);
     if (!userId) return reply.code(401).send({ error: "unauthorized" });
@@ -272,6 +388,7 @@ app.get<{ Params: { id: string } }>(
 
 app.get<{ Params: { id: string } }>(
   "/tracks/:id/download",
+  { schema: { params: idParams } },
   async (request, reply) => {
     const userId = requireUser(request);
     if (!userId) return reply.code(401).send({ error: "unauthorized" });
@@ -306,6 +423,7 @@ app.get<{ Params: { id: string } }>(
 
 app.get<{ Params: { id: string } }>(
   "/tracks/:id/comments",
+  { schema: { params: idParams } },
   async (request, reply) => {
     const userId = requireUser(request);
     if (!userId) return reply.code(401).send({ error: "unauthorized" });
@@ -339,60 +457,69 @@ app.get<{ Params: { id: string } }>(
 app.put<{
   Params: { id: string };
   Body: { body?: string };
-}>("/tracks/:id/comments", async (request, reply) => {
-  const userId = requireUser(request);
-  if (!userId) return reply.code(401).send({ error: "unauthorized" });
+}>(
+  "/tracks/:id/comments",
+  {
+    schema: {
+      params: idParams,
+      body: bodyOf({ body: { type: "string", maxLength: 20000 } }),
+    },
+  },
+  async (request, reply) => {
+    const userId = requireUser(request);
+    if (!userId) return reply.code(401).send({ error: "unauthorized" });
 
-  if (typeof request.body?.body !== "string") {
-    return reply.code(400).send({ error: "body required" });
-  }
-  const body = request.body.body.trim();
+    if (typeof request.body?.body !== "string") {
+      return reply.code(400).send({ error: "body required" });
+    }
+    const body = request.body.body.trim();
 
-  const [track] = await db
-    .select({ id: tracks.id })
-    .from(tracks)
-    .where(eq(tracks.id, request.params.id))
-    .limit(1);
-  if (!track) return reply.code(404).send({ error: "not found" });
+    const [track] = await db
+      .select({ id: tracks.id })
+      .from(tracks)
+      .where(eq(tracks.id, request.params.id))
+      .limit(1);
+    if (!track) return reply.code(404).send({ error: "not found" });
 
-  if (!body) {
-    await db
-      .delete(comments)
-      .where(and(eq(comments.trackId, track.id), eq(comments.userId, userId)));
-    return reply.code(204).send();
-  }
+    if (!body) {
+      await db
+        .delete(comments)
+        .where(and(eq(comments.trackId, track.id), eq(comments.userId, userId)));
+      return reply.code(204).send();
+    }
 
-  const now = new Date();
-  const [row] = await db
-    .insert(comments)
-    .values({
-      trackId: track.id,
-      userId,
-      body,
-      createdAt: now,
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: [comments.userId, comments.trackId],
-      set: { body, updatedAt: now },
-    })
-    .returning();
+    const now = new Date();
+    const [row] = await db
+      .insert(comments)
+      .values({
+        trackId: track.id,
+        userId,
+        body,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [comments.userId, comments.trackId],
+        set: { body, updatedAt: now },
+      })
+      .returning();
 
-  const [user] = await db
-    .select({ email: users.email })
-    .from(users)
-    .where(eq(users.id, userId))
-    .limit(1);
+    const [user] = await db
+      .select({ email: users.email })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
 
-  return {
-    id: row.id,
-    body: row.body,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    userId: row.userId,
-    userEmail: user?.email ?? "",
-  };
-});
+    return {
+      id: row.id,
+      body: row.body,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      userId: row.userId,
+      userEmail: user?.email ?? "",
+    };
+  },
+);
 
 const MIN_CLIP_SEC = 0.5;
 
@@ -450,7 +577,8 @@ function parseClips(raw: unknown): ArrangementClip[] | null {
       if (!item || typeof item !== "object") return null;
       const c = item as Record<string, unknown>;
       if (typeof c.instanceId !== "string" || !c.instanceId) return null;
-      if (typeof c.trackId !== "string" || !c.trackId) return null;
+      if (typeof c.trackId !== "string" || !UUID_RE.test(c.trackId))
+        return null;
       if (typeof c.startSec !== "number" || !Number.isFinite(c.startSec))
         return null;
       if (typeof c.offsetSec !== "number" || !Number.isFinite(c.offsetSec))
@@ -487,7 +615,8 @@ function parseClips(raw: unknown): ArrangementClip[] | null {
     if (!item || typeof item !== "object") return null;
     const c = item as Record<string, unknown>;
     if (typeof c.instanceId !== "string" || !c.instanceId) return null;
-    if (typeof c.trackId !== "string" || !c.trackId) return null;
+    if (typeof c.trackId !== "string" || !UUID_RE.test(c.trackId))
+      return null;
     if (typeof c.inSec !== "number" || !Number.isFinite(c.inSec)) return null;
     if (typeof c.outSec !== "number" || !Number.isFinite(c.outSec)) return null;
     const pauseSec =
@@ -598,6 +727,7 @@ app.get("/arrangements", async (request, reply) => {
 
 app.post<{ Body: { name?: string } }>(
   "/arrangements",
+  { schema: { body: bodyOf({ name: arrangementName }) } },
   async (request, reply) => {
     const userId = requireUser(request);
     if (!userId) return reply.code(401).send({ error: "unauthorized" });
@@ -626,6 +756,7 @@ app.post<{ Body: { name?: string } }>(
 
 app.get<{ Params: { id: string } }>(
   "/arrangements/:id",
+  { schema: { params: idParams } },
   async (request, reply) => {
     const userId = requireUser(request);
     if (!userId) return reply.code(401).send({ error: "unauthorized" });
@@ -639,6 +770,7 @@ app.get<{ Params: { id: string } }>(
 
 app.post<{ Params: { id: string } }>(
   "/arrangements/:id/copy",
+  { schema: { params: idParams } },
   async (request, reply) => {
     const userId = requireUser(request);
     if (!userId) return reply.code(401).send({ error: "unauthorized" });
@@ -667,74 +799,87 @@ app.post<{ Params: { id: string } }>(
 app.put<{
   Params: { id: string };
   Body: { name?: string; clips?: unknown };
-}>("/arrangements/:id", async (request, reply) => {
-  const userId = requireUser(request);
-  if (!userId) return reply.code(401).send({ error: "unauthorized" });
+}>(
+  "/arrangements/:id",
+  {
+    schema: {
+      params: idParams,
+      body: bodyOf({
+        name: arrangementName,
+        clips: { type: "array", maxItems: 2000 },
+      }),
+    },
+  },
+  async (request, reply) => {
+    const userId = requireUser(request);
+    if (!userId) return reply.code(401).send({ error: "unauthorized" });
 
-  const [row] = await db
-    .select()
-    .from(arrangements)
-    .where(
-      and(
-        eq(arrangements.id, request.params.id),
-        eq(arrangements.userId, userId),
-      ),
-    )
-    .limit(1);
-  if (!row) return reply.code(404).send({ error: "not found" });
+    const [row] = await db
+      .select()
+      .from(arrangements)
+      .where(
+        and(
+          eq(arrangements.id, request.params.id),
+          eq(arrangements.userId, userId),
+        ),
+      )
+      .limit(1);
+    if (!row) return reply.code(404).send({ error: "not found" });
 
-  const patch: {
-    name?: string;
-    clips?: ArrangementClip[];
-    updatedAt: Date;
-  } = { updatedAt: new Date() };
+    const patch: {
+      name?: string;
+      clips?: ArrangementClip[];
+      updatedAt: Date;
+    } = { updatedAt: new Date() };
 
-  if (typeof request.body?.name === "string") {
-    const name = request.body.name.trim();
-    if (!name) return reply.code(400).send({ error: "name required" });
-    if (name !== row.name) {
-      const [conflict] = await db
-        .select({ id: arrangements.id })
-        .from(arrangements)
-        .where(
-          and(eq(arrangements.userId, userId), eq(arrangements.name, name)),
-        )
-        .limit(1);
-      if (conflict) {
-        return reply.code(409).send({ error: "arrangement already exists" });
+    if (typeof request.body?.name === "string") {
+      const name = request.body.name.trim();
+      if (!name) return reply.code(400).send({ error: "name required" });
+      if (name !== row.name) {
+        const [conflict] = await db
+          .select({ id: arrangements.id })
+          .from(arrangements)
+          .where(
+            and(eq(arrangements.userId, userId), eq(arrangements.name, name)),
+          )
+          .limit(1);
+        if (conflict) {
+          return reply.code(409).send({ error: "arrangement already exists" });
+        }
       }
+      patch.name = name;
     }
-    patch.name = name;
-  }
 
-  if (request.body?.clips !== undefined) {
-    const clips = parseClips(request.body.clips);
-    if (!clips) return reply.code(400).send({ error: "invalid clips" });
-    if (clips.length > 0) {
-      const ids = [...new Set(clips.map((c) => c.trackId))];
-      const found = await db
-        .select({ id: tracks.id })
-        .from(tracks)
-        .where(inArray(tracks.id, ids));
-      if (found.length !== ids.length) {
-        return reply.code(400).send({ error: "one or more tracks not found" });
+    if (request.body?.clips !== undefined) {
+      const clips = parseClips(request.body.clips);
+      if (!clips) return reply.code(400).send({ error: "invalid clips" });
+      if (clips.length > 0) {
+        const ids = [...new Set(clips.map((c) => c.trackId))];
+        const found = await db
+          .select({ id: tracks.id })
+          .from(tracks)
+          .where(inArray(tracks.id, ids));
+        if (found.length !== ids.length) {
+          return reply.code(400).send({ error: "one or more tracks not found" });
+        }
       }
+      patch.clips = clips;
     }
-    patch.clips = clips;
-  }
 
-  if (patch.name === undefined && patch.clips === undefined) {
-    return reply.code(400).send({ error: "name or clips required" });
-  }
+    if (patch.name === undefined && patch.clips === undefined) {
+      return reply.code(400).send({ error: "name or clips required" });
+    }
 
-  await db.update(arrangements).set(patch).where(eq(arrangements.id, row.id));
+    await db.update(arrangements).set(patch).where(eq(arrangements.id, row.id));
 
-  const updated = await arrangementWithOwner(row.id);
-  return serializeArrangement(updated!);
-});
+    const updated = await arrangementWithOwner(row.id);
+    return serializeArrangement(updated!);
+  },
+);
 
 app.delete<{ Params: { id: string } }>(
   "/arrangements/:id",
+  { schema: { params: idParams } },
   async (request, reply) => {
     const userId = requireUser(request);
     if (!userId) return reply.code(401).send({ error: "unauthorized" });

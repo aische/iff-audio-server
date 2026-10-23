@@ -64,8 +64,6 @@ function usePersistedWidth(
   const [width, setWidth] = useState(() =>
     readStoredWidth(key, initial, min, max),
   );
-  const widthRef = useRef(width);
-  widthRef.current = width;
 
   useEffect(() => {
     try {
@@ -79,7 +77,7 @@ function usePersistedWidth(
     if (e.button !== 0) return;
     e.preventDefault();
     const startX = e.clientX;
-    const startW = widthRef.current;
+    const startW = width;
     const el = e.currentTarget;
     el.setPointerCapture(e.pointerId);
 
@@ -827,7 +825,7 @@ function TrackRow({
     }
   }, [mine?.body]);
 
-  const persist = useEffectEvent(async (body: string) => {
+  async function persist(body: string) {
     const trimmed = body.trim();
     if (trimmed === savedBodyRef.current.trim()) {
       setSaveState("idle");
@@ -848,6 +846,10 @@ function TrackRow({
       setSaveState("error");
       onError(err instanceof Error ? err.message : "Failed to save comment");
     }
+  }
+  // Debounced save reads the latest props without re-arming the timer.
+  const persistLater = useEffectEvent((body: string) => {
+    void persist(body);
   });
 
   useEffect(() => {
@@ -856,11 +858,9 @@ function TrackRow({
       setSaveState("idle");
       return;
     }
-    const t = window.setTimeout(() => {
-      void persist(draft);
-    }, AUTOSAVE_MS);
+    const t = window.setTimeout(() => persistLater(draft), AUTOSAVE_MS);
     return () => window.clearTimeout(t);
-  }, [draft, persist]);
+  }, [draft]);
 
   const tags = unifiedTags(track.comments.map((c) => c.body));
 

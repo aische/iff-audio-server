@@ -17,6 +17,11 @@ metadata:
   namespace: iff-audio
 spec:
   replicas: 1
+  # ReadWriteOnce data volume: never run the old and new pod side by side.
+  strategy:
+    type: Recreate
+    # Clears the defaulted rollingUpdate on clusters that already ran RollingUpdate.
+    rollingUpdate: null
   selector:
     matchLabels:
       app: iff-postgres
@@ -52,11 +57,9 @@ spec:
           readinessProbe:
             exec:
               command:
-                - pg_isready
-                - -U
-                - iff
-                - -d
-                - iff
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
             initialDelaySeconds: 5
             periodSeconds: 5
       volumes:

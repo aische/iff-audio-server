@@ -80,3 +80,8 @@ site_validate_paths() {
     exit 1
   fi
 }
+
+# Print "$1" as a JSON string literal (for kubectl --overrides).
+json_string() {
+  node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$1"
+}

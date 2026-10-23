@@ -1,6 +1,7 @@
 import {
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -121,6 +122,15 @@ function createPlayheadStore(): PlayheadStore {
       return () => listeners.delete(listener);
     },
   };
+}
+
+/** Ref to the latest committed value, for rAF loops, listeners and handlers. */
+function useLatestRef<T>(value: T) {
+  const ref = useRef(value);
+  useLayoutEffect(() => {
+    ref.current = value;
+  });
+  return ref;
 }
 
 /** Re-renders only when `select(playhead)` changes. */
@@ -299,23 +309,23 @@ function ClipWaveform({
   sourceDurHint?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [rec, setRec] = useState<PeaksRecord | null>(
-    () => getCachedPeaks(trackId) ?? null,
-  );
+  const [loaded, setLoaded] = useState<{
+    trackId: string;
+    rec: PeaksRecord | null;
+  } | null>(null);
+  const rec =
+    getCachedPeaks(trackId) ??
+    (loaded?.trackId === trackId ? loaded.rec : null);
 
   useEffect(() => {
-    const cached = getCachedPeaks(trackId);
-    if (cached) {
-      setRec(cached);
-      return;
-    }
+    if (getCachedPeaks(trackId)) return;
     let cancelled = false;
     void loadPeaks(trackId)
       .then((r) => {
-        if (!cancelled) setRec(r);
+        if (!cancelled) setLoaded({ trackId, rec: r });
       })
       .catch(() => {
-        if (!cancelled) setRec(null);
+        if (!cancelled) setLoaded({ trackId, rec: null });
       });
     return () => {
       cancelled = true;
@@ -411,22 +421,31 @@ export function ArrangeShell({
   const [newName, setNewName] = useState("");
   const [copyingId, setCopyingId] = useState<string | null>(null);
 
-  async function refresh() {
+  // .then callbacks (not await) so the lint sees every setState as async.
+  function load() {
+    return api
+      .listArrangements()
+      .then(
+        (rows) => {
+          setList(rows);
+          onError(null);
+        },
+        (err: unknown) => {
+          onError(
+            err instanceof Error ? err.message : "Failed to load arrangements",
+          );
+        },
+      )
+      .finally(() => setLoading(false));
+  }
+
+  function refresh() {
     setLoading(true);
-    try {
-      setList(await api.listArrangements());
-      onError(null);
-    } catch (err) {
-      onError(
-        err instanceof Error ? err.message : "Failed to load arrangements",
-      );
-    } finally {
-      setLoading(false);
-    }
+    return load();
   }
 
   useEffect(() => {
-    void refresh();
+    void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount
   }, []);
 
@@ -651,12 +670,9 @@ function ArrangeEditor({
   const [soloEndSec, setSoloEndSec] = useState<number | null>(null);
   const [soloClipId, setSoloClipId] = useState<string | null>(null);
 
-  const clipsRef = useRef(clips);
-  clipsRef.current = clips;
-  const playRef = useRef(playing);
-  playRef.current = playing;
-  const soloEndRef = useRef<number | null>(null);
-  soloEndRef.current = soloEndSec;
+  const clipsRef = useLatestRef(clips);
+  const playRef = useLatestRef(playing);
+  const soloEndRef = useLatestRef(soloEndSec);
   const savedSnapshotRef = useRef("");
   const saveSeqRef = useRef(0);
 
@@ -694,10 +710,8 @@ function ArrangeEditor({
 
   const isOwner = arrangement?.userId === user.id;
   const { segs, totalSec } = useMemo(() => buildSchedule(clips), [clips]);
-  const segsRef = useRef(segs);
-  segsRef.current = segs;
-  const totalSecRef = useRef(totalSec);
-  totalSecRef.current = totalSec;
+  const segsRef = useLatestRef(segs);
+  const totalSecRef = useLatestRef(totalSec);
 
   useEffect(() => {
     let cancelled = false;
@@ -726,7 +740,7 @@ function ArrangeEditor({
     return () => {
       cancelled = true;
     };
-  }, [arrangementId, playhead]);
+  }, [arrangementId, playhead, onError]);
 
   const persist = useEffectEvent(
     async (nextName: string, nextClips: ArrangementClip[]) => {
@@ -799,7 +813,7 @@ function ArrangeEditor({
       void persist(name, clips);
     }, AUTOSAVE_MS);
     return () => window.clearTimeout(t);
-  }, [clips, name, isOwner, persist]);
+  }, [clips, name, isOwner]);
 
   function ensureAudioCtx() {
     if (!audioCtxRef.current) {
@@ -1028,9 +1042,10 @@ function ArrangeEditor({
     }
   }
 
+  const releaseEngineOnUnmount = useEffectEvent(releaseEngine);
   useEffect(() => {
     return () => {
-      releaseEngine();
+      releaseEngineOnUnmount();
       void audioCtxRef.current?.close();
       audioCtxRef.current = null;
     };
@@ -1107,36 +1122,37 @@ function ArrangeEditor({
     };
   }, [peakTrackKey]);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
-      ) {
-        return;
-      }
-      if (e.key === " " || e.code === "Space") {
-        e.preventDefault();
-        if (playing) stopTransport();
-        else {
-          setSoloEndSec(null);
-          setSoloClipId(null);
-          setPlaying(true);
-        }
-      }
-      if (
-        isOwner &&
-        (e.key === "Backspace" || e.key === "Delete") &&
-        selectedId
-      ) {
-        e.preventDefault();
-        setClips((prev) => prev.filter((c) => c.instanceId !== selectedId));
-        setSelectedId(null);
+  const onKey = useEffectEvent((e: KeyboardEvent) => {
+    if (
+      e.target instanceof HTMLInputElement ||
+      e.target instanceof HTMLTextAreaElement
+    ) {
+      return;
+    }
+    if (e.key === " " || e.code === "Space") {
+      e.preventDefault();
+      if (playing) stopTransport();
+      else {
+        setSoloEndSec(null);
+        setSoloClipId(null);
+        setPlaying(true);
       }
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId, isOwner, playing]);
+    if (
+      isOwner &&
+      (e.key === "Backspace" || e.key === "Delete") &&
+      selectedId
+    ) {
+      e.preventDefault();
+      setClips((prev) => prev.filter((c) => c.instanceId !== selectedId));
+      setSelectedId(null);
+    }
+  });
+  useEffect(() => {
+    const listener = (e: KeyboardEvent) => onKey(e);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
 
   async function onCopyHere() {
     setCopying(true);
@@ -1868,8 +1884,7 @@ function ClipEditorPanel({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
-  const clipRef = useRef(clip);
-  clipRef.current = clip;
+  const clipRef = useLatestRef(clip);
   const dragRef = useRef<{
     kind: "in" | "out" | "range";
     grabOffset: number;

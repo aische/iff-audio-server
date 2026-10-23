@@ -5,7 +5,7 @@
 #   export DEPLOY_HOST=you@your-server
 #   ./deploy/k3s/deploy.sh upload
 #   ./deploy/k3s/deploy.sh apply
-#   MIGRATE=1 ./deploy/k3s/deploy.sh apply
+# Migrations run in the API pod's initContainer on every rollout.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -14,7 +14,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
 MODE="${1:-}"
-MIGRATE="${MIGRATE:-0}"
 
 cd "$ROOT"
 
@@ -32,7 +31,7 @@ require_site() {
   site_validate_paths deploy/k3s/site.yaml
 }
 
-# Substitute @BASE_PATH@ in web.yaml into a staging dir for rsync/apply.
+# Substitute @BASE_PATH@ in web.yaml / api.yaml into a staging dir for rsync/apply.
 stage_manifests() {
   local dest="$1"
   local base="$2"
@@ -41,8 +40,8 @@ stage_manifests() {
   local f
   for f in deploy/k3s/*.yaml; do
     case "$(basename "$f")" in
-      web.yaml)
-        sed "s|@BASE_PATH@|${base}|g" "$f" >"${dest}/web.yaml"
+      web.yaml | api.yaml)
+        sed "s|@BASE_PATH@|${base}|g" "$f" >"${dest}/$(basename "$f")"
         ;;
       *)
         cp "$f" "$dest/"
@@ -106,15 +105,8 @@ do_apply() {
     sudo k3s kubectl -n iff-audio rollout status deploy/iff-postgres
     sudo k3s kubectl -n iff-audio rollout status deploy/iff-api
     sudo k3s kubectl -n iff-audio rollout status deploy/iff-web
+    sudo k3s kubectl -n iff-audio logs deploy/iff-api -c migrate --tail=20 || true
   "
-
-  if [[ "$MIGRATE" == "1" ]]; then
-    remote_kubectl -n iff-audio delete job iff-migrate --ignore-not-found
-    # shellcheck disable=SC2029
-    ssh "$host" "sudo k3s kubectl apply -f $(printf '%q' "$remote_dir")/migrate-job.yaml"
-    remote_kubectl -n iff-audio wait --for=condition=complete job/iff-migrate --timeout=120s
-    remote_kubectl -n iff-audio logs job/iff-migrate
-  fi
 
   echo "Done. Smoke: curl -sS https://${ingress_host}${base}/api/health"
 }
