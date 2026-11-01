@@ -401,6 +401,7 @@ export function ArrangeShell({
   onArrangementPlayingChange,
   stopToken,
   openRequest,
+  onCheckTracks,
 }: {
   user: User;
   tracks: Track[];
@@ -412,6 +413,8 @@ export function ArrangeShell({
   stopToken: number;
   /** Open this arrangement (e.g. one just created from checked tracks). */
   openRequest: { id: string; seq: number } | null;
+  /** Replace the library's checked tracks with these track ids. */
+  onCheckTracks: (trackIds: string[]) => void;
 }) {
   const [list, setList] = useState<ArrangementSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -503,6 +506,7 @@ export function ArrangeShell({
         onOpen={setActiveId}
         onError={onError}
         onAddApiChange={onAddApiChange}
+        onCheckTracks={onCheckTracks}
         onArrangementPlayingChange={onArrangementPlayingChange}
         stopToken={stopToken}
       />
@@ -670,6 +674,7 @@ function ArrangeEditor({
   onOpen,
   onError,
   onAddApiChange,
+  onCheckTracks,
   onArrangementPlayingChange,
   stopToken,
 }: {
@@ -681,6 +686,7 @@ function ArrangeEditor({
   onOpen: (id: string) => void;
   onError: (message: string | null) => void;
   onAddApiChange: (api: ArrangeAddApi | null) => void;
+  onCheckTracks: (trackIds: string[]) => void;
   onArrangementPlayingChange: (playing: boolean) => void;
   stopToken: number;
 }) {
@@ -1462,6 +1468,17 @@ function ArrangeEditor({
             {copying ? "copying…" : "copy to mine"}
           </button>
         )}
+        <button
+          type="button"
+          className="filterButton"
+          disabled={clips.length === 0}
+          title="Check this arrangement's tracks in the library (replaces current checks)"
+          onClick={() =>
+            onCheckTracks([...new Set(clips.map((c) => c.trackId))])
+          }
+        >
+          check tracks
+        </button>
         <button
           type="button"
           className="filterButton"

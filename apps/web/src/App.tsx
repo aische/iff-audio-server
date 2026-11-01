@@ -524,6 +524,7 @@ function StudioShell({
               onArrangementPlayingChange={onArrangementPlayingChange}
               stopToken={stopToken}
               openRequest={openArrangement}
+              onCheckTracks={(ids) => setCheckedIds(new Set(ids))}
             />
           </div>
         )}
