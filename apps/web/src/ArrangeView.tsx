@@ -11,7 +11,6 @@ import {
 } from "react";
 import {
   api,
-  unifiedTags,
   type Arrangement,
   type ArrangementClip,
   type ArrangementSummary,
@@ -32,6 +31,8 @@ import {
   type PlaybackEngine,
   type PlaybackMode,
 } from "./arrangePlayback";
+import { formatClock, shortTitle } from "./format";
+import { TRACK_MIME, CLIP_MIME } from "./mime";
 
 const AUTOSAVE_MS = 600;
 const MIN_CLIP_SEC = 0.5;
@@ -50,10 +51,6 @@ const EDITOR_PX_DEFAULT = 40;
 const MAX_CANVAS_BACKING_PX = 8192;
 /** Soft cap on editor CSS width before we force-fit zoom. */
 const MAX_EDITOR_CSS_PX = 4096;
-const TRACK_MIME = "application/x-iff-track-id";
-const CLIP_MIME = "application/x-iff-clip-id";
-
-type FilterId = "all" | "commented";
 
 type ScheduleSeg = {
   clip: ArrangementClip;
@@ -167,25 +164,10 @@ function newInstanceId() {
   return crypto.randomUUID();
 }
 
-function formatClock(sec: number) {
-  const s = Math.max(0, Math.floor(sec));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const r = s % 60;
-  if (h > 0) {
-    return `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
-  }
-  return `${m}:${String(r).padStart(2, "0")}`;
-}
-
 function formatPxPerSec(n: number) {
   if (n >= 10) return n.toFixed(0);
   if (n >= 1) return n.toFixed(1);
   return n.toFixed(2);
-}
-
-function shortName(filename: string) {
-  return filename.replace(/\.aif\.mp3$/i, "").replace(/\.mp3$/i, "");
 }
 
 function sanitizeDownloadName(name: string) {
@@ -370,10 +352,10 @@ function ClipWaveform({
       drawClipWaveform(ctx, rec.peaks, srcDur, 0, srcDur, cssW, cssH);
       const x0 = (offsetSec / srcDur) * cssW;
       const x1 = ((offsetSec + durationSec) / srcDur) * cssW;
-      ctx.fillStyle = "rgba(20, 22, 24, 0.55)";
+      ctx.fillStyle = "rgba(26, 25, 23, 0.55)";
       ctx.fillRect(0, 0, Math.max(0, x0), cssH);
       ctx.fillRect(Math.min(cssW, x1), 0, Math.max(0, cssW - x1), cssH);
-      ctx.fillStyle = "rgba(232, 93, 76, 0.12)";
+      ctx.fillStyle = "rgba(212, 160, 23, 0.14)";
       ctx.fillRect(x0, 0, Math.max(0, x1 - x0), cssH);
     } else {
       drawClipWaveform(
@@ -400,20 +382,33 @@ function ClipWaveform({
   return <canvas ref={canvasRef} className="arr-clip-wave" aria-hidden />;
 }
 
+// ---------------------------------------------------------------------------
+// Public API type exposed to the parent shell for adding tracks.
+// ---------------------------------------------------------------------------
+
+export type ArrangeAddApi = {
+  addTrack: (trackId: string, atIndex?: number) => void;
+  isOwner: boolean;
+};
+
+// ---------------------------------------------------------------------------
+// ArrangeShell — arrangement list + editor, rendered as a right panel.
+// ---------------------------------------------------------------------------
+
 export function ArrangeShell({
   user,
   tracks,
-  hideReleased,
-  onHideReleasedChange,
-  onBack,
   onError,
+  onAddApiChange,
+  onArrangementPlayingChange,
+  stopToken,
 }: {
   user: User;
   tracks: Track[];
-  hideReleased: boolean;
-  onHideReleasedChange: (value: boolean) => void;
-  onBack: () => void;
   onError: (message: string | null) => void;
+  onAddApiChange: (api: ArrangeAddApi | null) => void;
+  onArrangementPlayingChange: (playing: boolean) => void;
+  stopToken: number;
 }) {
   const [list, setList] = useState<ArrangementSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -421,7 +416,6 @@ export function ArrangeShell({
   const [newName, setNewName] = useState("");
   const [copyingId, setCopyingId] = useState<string | null>(null);
 
-  // .then callbacks (not await) so the lint sees every setState as async.
   function load() {
     return api
       .listArrangements()
@@ -448,6 +442,11 @@ export function ArrangeShell({
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount
   }, []);
+
+  // Report null API while list view is showing.
+  useEffect(() => {
+    if (!activeId) onAddApiChange(null);
+  }, [activeId, onAddApiChange]);
 
   async function onCreate(e: FormEvent) {
     e.preventDefault();
@@ -483,15 +482,15 @@ export function ArrangeShell({
         arrangementId={activeId}
         user={user}
         tracks={tracks}
-        hideReleased={hideReleased}
-        onHideReleasedChange={onHideReleasedChange}
         onBack={() => {
           setActiveId(null);
           void refresh();
         }}
         onOpen={setActiveId}
-        onCloseAll={onBack}
         onError={onError}
+        onAddApiChange={onAddApiChange}
+        onArrangementPlayingChange={onArrangementPlayingChange}
+        stopToken={stopToken}
       />
     );
   }
@@ -500,11 +499,8 @@ export function ArrangeShell({
   const others = list.filter((a) => a.userId !== user.id);
 
   return (
-    <div className="arr-root">
+    <div className="arr-panel">
       <div className="arr-toolbar">
-        <button type="button" className="filterButton" onClick={onBack}>
-          ← pool
-        </button>
         <span className="arr-toolbar-title">arrangements</span>
       </div>
       <div className="arr-list-body">
@@ -533,7 +529,7 @@ export function ArrangeShell({
               empty="You have no arrangements yet."
               onOpen={setActiveId}
               onDelete={async (a) => {
-                if (!confirm(`Delete “${a.name}”?`)) return;
+                if (!confirm(`Delete "${a.name}"?`)) return;
                 try {
                   await api.deleteArrangement(a.id);
                   await refresh();
@@ -626,34 +622,35 @@ function ArrangementListSection({
   );
 }
 
+// ---------------------------------------------------------------------------
+// ArrangeEditor — single arrangement: sequence, trim, playback, autosave.
+// ---------------------------------------------------------------------------
+
 function ArrangeEditor({
   arrangementId,
   user,
   tracks,
-  hideReleased,
-  onHideReleasedChange,
   onBack,
   onOpen,
-  onCloseAll,
   onError,
+  onAddApiChange,
+  onArrangementPlayingChange,
+  stopToken,
 }: {
   arrangementId: string;
   user: User;
   tracks: Track[];
-  hideReleased: boolean;
-  onHideReleasedChange: (value: boolean) => void;
   onBack: () => void;
   onOpen: (id: string) => void;
-  onCloseAll: () => void;
   onError: (message: string | null) => void;
+  onAddApiChange: (api: ArrangeAddApi | null) => void;
+  onArrangementPlayingChange: (playing: boolean) => void;
+  stopToken: number;
 }) {
   const [arrangement, setArrangement] = useState<Arrangement | null>(null);
   const [clips, setClips] = useState<ArrangementClip[]>([]);
   const [name, setName] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [hoveredTrackId, setHoveredTrackId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<FilterId>("all");
-  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [pxPerSec, setPxPerSec] = useState(PX_PER_SEC_DEFAULT);
   const [editorPxPerSec, setEditorPxPerSec] = useState(EDITOR_PX_DEFAULT);
   const [playing, setPlaying] = useState(false);
@@ -697,14 +694,6 @@ function ArrangeEditor({
   const trackById = useMemo(() => {
     const m = new Map<string, Track>();
     for (const t of tracks) m.set(t.id, t);
-    return m;
-  }, [tracks]);
-
-  const tagsByTrack = useMemo(() => {
-    const m = new Map<string, string[]>();
-    for (const t of tracks) {
-      m.set(t.id, unifiedTags(t.comments.map((c) => c.body)));
-    }
     return m;
   }, [tracks]);
 
@@ -887,7 +876,6 @@ function ArrangeEditor({
     slot.state = "loading";
     slot.voice.load(offsetSec).then(
       () => {
-        // The next sync starts it from wherever the playhead is by then.
         if (isSlotCurrent(slot, gen)) slot.state = "ready";
       },
       (err: unknown) => {
@@ -981,7 +969,6 @@ function ArrangeEditor({
       keep.add(next.clip.instanceId);
       const slot = ensureSlot(next.clip);
       const delay = next.arrStart - at;
-      // Let the clip under the playhead load first.
       if (slot.state === "idle" && (!curSlot || curSlot.state === "started")) {
         loadSlot(slot, next.clip.inSec);
       } else if (slot.state === "ready" && delay <= LOOKAHEAD_SEC) {
@@ -1122,6 +1109,25 @@ function ArrangeEditor({
     };
   }, [peakTrackKey]);
 
+  // Notify parent when playing state changes.
+  const notifyPlaying = useEffectEvent((p: boolean) => {
+    onArrangementPlayingChange(p);
+  });
+  useEffect(() => {
+    notifyPlaying(playing);
+  }, [playing]);
+
+  // Stop transport when stopToken increments (skip initial mount).
+  const stopTokenRef = useRef(stopToken);
+  const stopOnToken = useEffectEvent(() => {
+    if (playing) stopTransport();
+  });
+  useEffect(() => {
+    if (stopTokenRef.current === stopToken) return;
+    stopTokenRef.current = stopToken;
+    stopOnToken();
+  }, [stopToken]);
+
   const onKey = useEffectEvent((e: KeyboardEvent) => {
     if (
       e.target instanceof HTMLInputElement ||
@@ -1167,22 +1173,11 @@ function ArrangeEditor({
     }
   }
 
-  const sidebarTracks = tracks.filter((t) => {
-    if (!t.present) return false;
-    if (hideReleased && t.releasedOn) return false;
-    if (filter === "commented" && t.comments.length === 0) return false;
-    if (tagFilter && !tagsByTrack.get(t.id)?.includes(tagFilter)) {
-      return false;
-    }
-    return true;
-  });
-
   const selected = selectedId
     ? (clips.find((c) => c.instanceId === selectedId) ?? null)
     : null;
-  const currentTrackId = hoveredTrackId ?? selected?.trackId ?? null;
-  const currentTrack = currentTrackId
-    ? (trackById.get(currentTrackId) ?? null)
+  const currentTrack = selected
+    ? (trackById.get(selected.trackId) ?? null)
     : null;
 
   function addTrack(trackId: string, atIndex?: number) {
@@ -1214,6 +1209,18 @@ function ArrangeEditor({
       Math.min(EDITOR_PX_DEFAULT, Math.max(PX_PER_SEC_MIN, fit)),
     );
   }
+
+  // Publish addTrack API to parent via ref callback.
+  const publishApi = useEffectEvent(() => {
+    onAddApiChange({
+      addTrack: (trackId, atIndex) => addTrack(trackId, atIndex),
+      isOwner,
+    });
+  });
+  useEffect(() => {
+    publishApi();
+    return () => onAddApiChange(null);
+  }, [isOwner, arrangementId, onAddApiChange]);
 
   function updateClip(
     id: string,
@@ -1253,7 +1260,6 @@ function ArrangeEditor({
     if (!clip) return;
     const track = trackById.get(clip.trackId);
     const src = sourceDuration(track, getCachedPeaks(clip.trackId) ?? null);
-    // Fit full source into a safe editor width so long tracks don't blow the layout.
     const fit = MAX_EDITOR_CSS_PX / Math.max(src, MIN_CLIP_SEC);
     setEditorPxPerSec(
       Math.min(EDITOR_PX_DEFAULT, Math.max(PX_PER_SEC_MIN, fit)),
@@ -1331,7 +1337,7 @@ function ArrangeEditor({
 
   if (!arrangement) {
     return (
-      <div className="arr-root">
+      <div className="arr-panel">
         <p className="arr-muted" style={{ padding: 12 }}>
           Loading arrangement…
         </p>
@@ -1340,13 +1346,10 @@ function ArrangeEditor({
   }
 
   return (
-    <div className="arr-root">
+    <div className="arr-panel">
       <div className="arr-toolbar">
         <button type="button" className="filterButton" onClick={onBack}>
-          ← list
-        </button>
-        <button type="button" className="filterButton" onClick={onCloseAll}>
-          pool
+          ← arrangements
         </button>
         <input
           className="arr-name-input"
@@ -1470,394 +1473,280 @@ function ArrangeEditor({
         </span>
       </div>
 
-      <div className="arr-body">
-        <aside className="arr-sidebar">
-          <div className="arr-sidebar-filters">
-            {(
-              [
-                ["all", "all"],
-                ["commented", "commented"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={
-                  filter === id && !tagFilter
-                    ? "filterButton filterSelected"
-                    : "filterButton"
-                }
-                onClick={() => {
-                  setFilter(id);
-                  setTagFilter(null);
-                }}
-              >
-                {label}
-              </button>
-            ))}
-            <button
-              type="button"
+      <div className="arr-main">
+        <div
+          className={
+            isOwner
+              ? "arr-sequence-wrap"
+              : "arr-sequence-wrap arr-sequence-readonly"
+          }
+          onDragOver={(e) => {
+            if (isOwner) e.preventDefault();
+          }}
+          onDrop={(e) => onSequenceDrop(e, clips.length)}
+          onDragEnd={clearDrag}
+        >
+          {clips.length === 0 ? (
+            <div className="arr-sequence-empty">
+              {isOwner
+                ? "Drag tracks from the library (or double-click) to build the sequence."
+                : "This arrangement has no clips."}
+            </div>
+          ) : (
+            <div
               className={
-                hideReleased ? "filterButton filterSelected" : "filterButton"
+                dragClipId
+                  ? "arr-sequence arr-sequence-dragging"
+                  : "arr-sequence"
               }
-              onClick={() => onHideReleasedChange(!hideReleased)}
-              title="Hide tracks that already have a release label"
             >
-              {hideReleased ? "rel hidden" : "rel shown"}
-            </button>
-            <span className="arr-muted">{sidebarTracks.length}</span>
-            {tagFilter && (
-              <button
-                type="button"
-                className="tagButton"
-                onClick={() => setTagFilter(null)}
-              >
-                clear #{tagFilter}
-              </button>
-            )}
-          </div>
-          <div className="arr-sidebar-list">
-            {sidebarTracks.map((t) => {
-              const tags = tagsByTrack.get(t.id) ?? [];
-              return (
-                <div
-                  key={t.id}
-                  className={
-                    hoveredTrackId === t.id
-                      ? "arr-sidebar-item arr-sidebar-item-current"
-                      : "arr-sidebar-item"
-                  }
-                  draggable={isOwner}
-                  onMouseEnter={() => setHoveredTrackId(t.id)}
-                  onMouseLeave={() => setHoveredTrackId(null)}
-                  onDragStart={(e) => {
-                    if (!isOwner) {
-                      e.preventDefault();
-                      return;
-                    }
-                    e.dataTransfer.setData(TRACK_MIME, t.id);
-                    e.dataTransfer.setData("text/plain", t.id);
-                    e.dataTransfer.effectAllowed = "copy";
-                  }}
-                  onDoubleClick={() => {
-                    if (isOwner) addTrack(t.id);
-                  }}
-                  title={t.filename}
-                >
-                  <div className="arr-sidebar-item-main">
-                    <span className="arr-sidebar-dur">
-                      {t.durationSeconds != null
-                        ? formatClock(t.durationSeconds)
-                        : "—"}
-                    </span>
-                    <span className="arr-sidebar-name">
-                      {shortName(t.filename)}
-                    </span>
-                  </div>
-                  {tags.length > 0 && (
-                    <div className="arr-sidebar-tags">
-                      {tags.map((tag) => (
+              {clips.map((clip, index) => {
+                const track = trackById.get(clip.trackId);
+                const isSelected = clip.instanceId === selectedId;
+                const dur = clipDuration(clip);
+                const waveW = Math.max(48, dur * pxPerSec);
+                const pauseW =
+                  clip.pauseSec > 0
+                    ? Math.max(12, clip.pauseSec * pxPerSec)
+                    : 0;
+                const audioSeg = segs.find(
+                  (s) =>
+                    s.kind === "audio" &&
+                    s.clip.instanceId === clip.instanceId,
+                );
+
+                return (
+                  <div key={clip.instanceId} className="arr-row-block">
+                    <div
+                      className={
+                        dropIndex === index
+                          ? "arr-drop-slot arr-drop-slot-active"
+                          : "arr-drop-slot"
+                      }
+                      onDragOver={(e) => {
+                        if (!isOwner) return;
+                        e.preventDefault();
+                        setDropIndex(index);
+                      }}
+                      onDragLeave={() => {
+                        setDropIndex((i) => (i === index ? null : i));
+                      }}
+                      onDrop={(e) => onSequenceDrop(e, index)}
+                    />
+                    <div
+                      className={[
+                        "arr-row",
+                        isSelected ? "arr-row-selected" : "",
+                        dragClipId === clip.instanceId
+                          ? "arr-row-dragging"
+                          : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      onClick={() => selectClip(clip.instanceId)}
+                    >
+                      <div className="arr-row-meta">
+                        <span
+                          className="arr-row-handle"
+                          title="Drag to reorder"
+                          draggable={isOwner}
+                          onDragStart={(e) => {
+                            if (!isOwner) {
+                              e.preventDefault();
+                              return;
+                            }
+                            e.dataTransfer.setData(
+                              CLIP_MIME,
+                              clip.instanceId,
+                            );
+                            e.dataTransfer.setData(
+                              "text/clip-id",
+                              clip.instanceId,
+                            );
+                            e.dataTransfer.effectAllowed = "move";
+                            setDragClipId(clip.instanceId);
+                            const label = track
+                              ? shortTitle(track.filename)
+                              : "clip";
+                            const ghost = document.createElement("div");
+                            ghost.className = "arr-drag-ghost";
+                            ghost.textContent = `${index + 1}. ${label}`;
+                            document.body.appendChild(ghost);
+                            e.dataTransfer.setDragImage(ghost, 16, 16);
+                            window.setTimeout(() => ghost.remove(), 0);
+                          }}
+                          onDragEnd={clearDrag}
+                        >
+                          ⠿
+                        </span>
+                        <span className="arr-row-index">{index + 1}</span>
                         <button
-                          key={tag}
                           type="button"
                           className={
-                            tagFilter === tag
-                              ? "tagButton tagButtonSelected"
-                              : "tagButton"
+                            playing && soloClipId === clip.instanceId
+                              ? "filterButton filterSelected arr-row-play"
+                              : "filterButton arr-row-play"
                           }
-                          draggable={false}
-                          onPointerDown={(e) => e.stopPropagation()}
+                          title="Play this clip from selection start"
                           onClick={(e) => {
                             e.stopPropagation();
-                            setTagFilter(tag);
+                            playClipSelection(clip);
                           }}
                         >
-                          {tag}
+                          {playing && soloClipId === clip.instanceId
+                            ? "stop"
+                            : "play"}
                         </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </aside>
-
-        <div className="arr-main">
-          <div
-            className={
-              isOwner
-                ? "arr-sequence-wrap"
-                : "arr-sequence-wrap arr-sequence-readonly"
-            }
-            onDragOver={(e) => {
-              if (isOwner) e.preventDefault();
-            }}
-            onDrop={(e) => onSequenceDrop(e, clips.length)}
-            onDragEnd={clearDrag}
-          >
-            {clips.length === 0 ? (
-              <div className="arr-sequence-empty">
-                {isOwner
-                  ? "Drag tracks here (or double-click in the sidebar) to build the sequence."
-                  : "This arrangement has no clips."}
-              </div>
-            ) : (
-              <div
-                className={
-                  dragClipId
-                    ? "arr-sequence arr-sequence-dragging"
-                    : "arr-sequence"
-                }
-              >
-                {clips.map((clip, index) => {
-                  const track = trackById.get(clip.trackId);
-                  const isSelected = clip.instanceId === selectedId;
-                  const dur = clipDuration(clip);
-                  const waveW = Math.max(48, dur * pxPerSec);
-                  const pauseW =
-                    clip.pauseSec > 0
-                      ? Math.max(12, clip.pauseSec * pxPerSec)
-                      : 0;
-                  const audioSeg = segs.find(
-                    (s) =>
-                      s.kind === "audio" &&
-                      s.clip.instanceId === clip.instanceId,
-                  );
-
-                  return (
-                    <div key={clip.instanceId} className="arr-row-block">
-                      <div
-                        className={
-                          dropIndex === index
-                            ? "arr-drop-slot arr-drop-slot-active"
-                            : "arr-drop-slot"
-                        }
-                        onDragOver={(e) => {
-                          if (!isOwner) return;
-                          e.preventDefault();
-                          setDropIndex(index);
-                        }}
-                        onDragLeave={() => {
-                          setDropIndex((i) => (i === index ? null : i));
-                        }}
-                        onDrop={(e) => onSequenceDrop(e, index)}
-                      />
-                      <div
-                        className={[
-                          "arr-row",
-                          isSelected ? "arr-row-selected" : "",
-                          dragClipId === clip.instanceId
-                            ? "arr-row-dragging"
-                            : "",
-                        ]
-                          .filter(Boolean)
-                          .join(" ")}
-                        onClick={() => selectClip(clip.instanceId)}
-                      >
-                        <div className="arr-row-meta">
-                          <span
-                            className="arr-row-handle"
-                            title="Drag to reorder"
-                            draggable={isOwner}
-                            onDragStart={(e) => {
-                              if (!isOwner) {
-                                e.preventDefault();
-                                return;
-                              }
-                              e.dataTransfer.setData(
-                                CLIP_MIME,
-                                clip.instanceId,
-                              );
-                              e.dataTransfer.setData(
-                                "text/clip-id",
-                                clip.instanceId,
-                              );
-                              e.dataTransfer.effectAllowed = "move";
-                              setDragClipId(clip.instanceId);
-                              const label = track
-                                ? shortName(track.filename)
-                                : "clip";
-                              const ghost = document.createElement("div");
-                              ghost.className = "arr-drag-ghost";
-                              ghost.textContent = `${index + 1}. ${label}`;
-                              document.body.appendChild(ghost);
-                              e.dataTransfer.setDragImage(ghost, 16, 16);
-                              window.setTimeout(() => ghost.remove(), 0);
-                            }}
-                            onDragEnd={clearDrag}
-                          >
-                            ⠿
-                          </span>
-                          <span className="arr-row-index">{index + 1}</span>
+                        {isOwner && (
                           <button
                             type="button"
-                            className={
-                              playing && soloClipId === clip.instanceId
-                                ? "filterButton filterSelected arr-row-play"
-                                : "filterButton arr-row-play"
-                            }
-                            title="Play this clip from selection start"
+                            className="filterButton arr-row-remove"
+                            title="Remove clip"
                             onClick={(e) => {
                               e.stopPropagation();
-                              playClipSelection(clip);
+                              setClips((prev) =>
+                                prev.filter(
+                                  (c) => c.instanceId !== clip.instanceId,
+                                ),
+                              );
+                              if (selectedId === clip.instanceId) {
+                                setSelectedId(null);
+                              }
                             }}
                           >
-                            {playing && soloClipId === clip.instanceId
-                              ? "stop"
-                              : "play"}
+                            ×
                           </button>
-                          {isOwner && (
-                            <button
-                              type="button"
-                              className="filterButton arr-row-remove"
-                              title="Remove clip"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setClips((prev) =>
-                                  prev.filter(
-                                    (c) => c.instanceId !== clip.instanceId,
-                                  ),
-                                );
-                                if (selectedId === clip.instanceId) {
-                                  setSelectedId(null);
-                                }
-                              }}
-                            >
-                              ×
-                            </button>
-                          )}
-                          <span
-                            className="arr-row-name"
-                            title={track?.filename ?? clip.trackId}
-                          >
-                            {track ? shortName(track.filename) : "?"}
-                          </span>
-                          <label className="arr-row-field">
-                            pause
-                            <input
-                              type="number"
-                              min={0}
-                              step={0.5}
-                              disabled={!isOwner}
-                              value={clip.pauseSec}
-                              onClick={(e) => e.stopPropagation()}
-                              onChange={(e) =>
-                                updateClip(clip.instanceId, {
-                                  pauseSec: Number(e.target.value) || 0,
-                                })
-                              }
-                            />
-                          </label>
-                          <label className="arr-row-field">
-                            gain
-                            <input
-                              type="range"
-                              min={0}
-                              max={2}
-                              step={0.05}
-                              disabled={!isOwner}
-                              value={clip.gain}
-                              onClick={(e) => e.stopPropagation()}
-                              onChange={(e) =>
-                                updateClip(clip.instanceId, {
-                                  gain: Number(e.target.value),
-                                })
-                              }
-                            />
-                            <span className="arr-row-gain-val">
-                              ×{clip.gain.toFixed(2)}
-                            </span>
-                          </label>
-                        </div>
-                        <div
-                          className="arr-row-wave-wrap"
-                          style={{ width: waveW + pauseW }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            selectClip(clip.instanceId);
-                            if (!audioSeg) return;
-                            const rect =
-                              e.currentTarget.getBoundingClientRect();
-                            const x = e.clientX - rect.left;
-                            if (x <= waveW) {
-                              seekToArrangement(
-                                audioSeg.arrStart + x / pxPerSec,
-                              );
-                            } else if (clip.pauseSec > 0) {
-                              seekToArrangement(
-                                audioSeg.arrEnd + (x - waveW) / pxPerSec,
-                              );
-                            }
-                          }}
+                        )}
+                        <span
+                          className="arr-row-name"
+                          title={track?.filename ?? clip.trackId}
                         >
-                          <div
-                            className="arr-row-wave"
-                            style={{ width: waveW, height: ROW_WAVE_H }}
-                          >
-                            <ClipWaveform
-                              trackId={clip.trackId}
-                              offsetSec={clip.inSec}
-                              durationSec={dur}
-                              width={waveW}
-                              height={ROW_WAVE_H}
-                              peaksVersion={peaksVersion}
-                            />
-                            {audioSeg && (
-                              <RowPlayhead
-                                store={playhead}
-                                arrStart={audioSeg.arrStart}
-                                arrEnd={audioSeg.arrEnd}
-                                pxPerSec={pxPerSec}
-                              />
-                            )}
-                          </div>
-                          {pauseW > 0 && (
-                            <div
-                              className="arr-row-pause"
-                              style={{ width: pauseW, height: ROW_WAVE_H }}
-                              title={`pause ${formatClock(clip.pauseSec)}`}
+                          {track ? shortTitle(track.filename) : "?"}
+                        </span>
+                        <label className="arr-row-field">
+                          pause
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.5}
+                            disabled={!isOwner}
+                            value={clip.pauseSec}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) =>
+                              updateClip(clip.instanceId, {
+                                pauseSec: Number(e.target.value) || 0,
+                              })
+                            }
+                          />
+                        </label>
+                        <label className="arr-row-field">
+                          gain
+                          <input
+                            type="range"
+                            min={0}
+                            max={2}
+                            step={0.05}
+                            disabled={!isOwner}
+                            value={clip.gain}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) =>
+                              updateClip(clip.instanceId, {
+                                gain: Number(e.target.value),
+                              })
+                            }
+                          />
+                          <span className="arr-row-gain-val">
+                            ×{clip.gain.toFixed(2)}
+                          </span>
+                        </label>
+                      </div>
+                      <div
+                        className="arr-row-wave-wrap"
+                        style={{ width: waveW + pauseW }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          selectClip(clip.instanceId);
+                          if (!audioSeg) return;
+                          const rect =
+                            e.currentTarget.getBoundingClientRect();
+                          const x = e.clientX - rect.left;
+                          if (x <= waveW) {
+                            seekToArrangement(
+                              audioSeg.arrStart + x / pxPerSec,
+                            );
+                          } else if (clip.pauseSec > 0) {
+                            seekToArrangement(
+                              audioSeg.arrEnd + (x - waveW) / pxPerSec,
+                            );
+                          }
+                        }}
+                      >
+                        <div
+                          className="arr-row-wave"
+                          style={{ width: waveW, height: ROW_WAVE_H }}
+                        >
+                          <ClipWaveform
+                            trackId={clip.trackId}
+                            offsetSec={clip.inSec}
+                            durationSec={dur}
+                            width={waveW}
+                            height={ROW_WAVE_H}
+                            peaksVersion={peaksVersion}
+                          />
+                          {audioSeg && (
+                            <RowPlayhead
+                              store={playhead}
+                              arrStart={audioSeg.arrStart}
+                              arrEnd={audioSeg.arrEnd}
+                              pxPerSec={pxPerSec}
                             />
                           )}
                         </div>
+                        {pauseW > 0 && (
+                          <div
+                            className="arr-row-pause"
+                            style={{ width: pauseW, height: ROW_WAVE_H }}
+                            title={`pause ${formatClock(clip.pauseSec)}`}
+                          />
+                        )}
                       </div>
                     </div>
-                  );
-                })}
-                <div
-                  className={
-                    dropIndex === clips.length
-                      ? "arr-drop-slot arr-drop-slot-end arr-drop-slot-active"
-                      : "arr-drop-slot arr-drop-slot-end"
-                  }
-                  onDragOver={(e) => {
-                    if (!isOwner) return;
-                    e.preventDefault();
-                    setDropIndex(clips.length);
-                  }}
-                  onDragLeave={() => {
-                    setDropIndex((i) => (i === clips.length ? null : i));
-                  }}
-                  onDrop={(e) => onSequenceDrop(e, clips.length)}
-                />
-              </div>
-            )}
-          </div>
-
-          <ClipEditorPanel
-            clip={selected}
-            track={selected ? (trackById.get(selected.trackId) ?? null) : null}
-            isOwner={isOwner}
-            peaksVersion={peaksVersion}
-            editorPxPerSec={editorPxPerSec}
-            onZoom={(fn) => setEditorPxPerSec(fn)}
-            onChange={(patch) => {
-              if (selected) updateClip(selected.instanceId, patch);
-            }}
-          />
-
-          <ClipCommentsPanel track={currentTrack} />
+                  </div>
+                );
+              })}
+              <div
+                className={
+                  dropIndex === clips.length
+                    ? "arr-drop-slot arr-drop-slot-end arr-drop-slot-active"
+                    : "arr-drop-slot arr-drop-slot-end"
+                }
+                onDragOver={(e) => {
+                  if (!isOwner) return;
+                  e.preventDefault();
+                  setDropIndex(clips.length);
+                }}
+                onDragLeave={() => {
+                  setDropIndex((i) => (i === clips.length ? null : i));
+                }}
+                onDrop={(e) => onSequenceDrop(e, clips.length)}
+              />
+            </div>
+          )}
         </div>
+
+        <ClipEditorPanel
+          clip={selected}
+          track={selected ? (trackById.get(selected.trackId) ?? null) : null}
+          isOwner={isOwner}
+          peaksVersion={peaksVersion}
+          editorPxPerSec={editorPxPerSec}
+          onZoom={(fn) => setEditorPxPerSec(fn)}
+          onChange={(patch) => {
+            if (selected) updateClip(selected.instanceId, patch);
+          }}
+        />
+
+        <ClipCommentsPanel track={currentTrack} />
       </div>
     </div>
   );
@@ -1909,7 +1798,6 @@ function ClipEditorPanel({
   );
   const effectivePx = Math.min(editorPxPerSec, Math.max(PX_PER_SEC_MIN, maxPx));
   const widthPx = Math.max(320, srcDur * effectivePx);
-  // Integer pixels so handle lines don't fight subpixel antialias / canvas dim.
   const inX = Math.round(clip.inSec * effectivePx);
   const outX = Math.round(clip.outSec * effectivePx);
   const selW = Math.max(4, outX - inX);
@@ -1919,7 +1807,6 @@ function ClipEditorPanel({
     const canvas = canvasRef.current;
     if (!canvas) return 0;
     const rect = canvas.getBoundingClientRect();
-    // clientLeft skips the canvas border so we match absolute `left` coords.
     return clientX - rect.left - canvas.clientLeft;
   }
 
@@ -1947,7 +1834,6 @@ function ClipEditorPanel({
         fixedLen: current.outSec - current.inSec,
       };
     } else if (kind === "in") {
-      // Keep the line under the cursor even when grabbing the wide hit area.
       dragRef.current = { kind: "in", grabOffset: at - current.inSec };
     } else {
       dragRef.current = { kind: "out", grabOffset: at - current.outSec };
@@ -1997,7 +1883,7 @@ function ClipEditorPanel({
   return (
     <div className="arr-editor">
       <div className="arr-editor-header">
-        <span className="arr-editor-title">{shortName(track.filename)}</span>
+        <span className="arr-editor-title">{shortTitle(track.filename)}</span>
         <span className="arr-muted">
           full {formatClock(srcDur)} · selection{" "}
           {formatClock(clipDuration(clip))}
@@ -2095,7 +1981,7 @@ function ClipCommentsPanel({ track }: { track: Track | null }) {
     return (
       <div className="arr-comments" aria-live="polite">
         <div className="arr-comments-empty">
-          Select a clip or hover a track to see its comments.
+          Select a clip to see its comments.
         </div>
       </div>
     );
@@ -2105,7 +1991,7 @@ function ClipCommentsPanel({ track }: { track: Track | null }) {
   return (
     <div className="arr-comments" aria-live="polite">
       <div className="arr-comments-header">
-        <span className="arr-comments-title">{shortName(track.filename)}</span>
+        <span className="arr-comments-title">{shortTitle(track.filename)}</span>
         <span className="arr-muted">
           {comments.length === 0
             ? "no comments"
