@@ -36,7 +36,8 @@ function formatDate(iso: string): string {
 }
 
 /**
- * Read-only detail card for one track (hovered, else selected).
+ * Read-only detail card for one track (last hovered in the library or the
+ * arrangement, else the selected row).
  * Pointer-transparent so it never blocks the rows underneath.
  */
 export function TrackInspector({

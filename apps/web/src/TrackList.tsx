@@ -741,8 +741,8 @@ export function TrackList({
   loading: boolean;
   onTogglePlay: (track: Track) => void;
   onSelect: (track: Track) => void;
-  /** Hovered row; null once the pointer leaves the list. */
-  onHover: (trackId: string | null) => void;
+  /** Pointer entered this row. */
+  onHover: (trackId: string) => void;
   onTagClick: (tag: string) => void;
   onToggleSort: (key: SortKey) => void;
   onCommentsChange: (trackId: string, comments: Comment[]) => void;
@@ -781,11 +781,7 @@ export function TrackList({
   }
 
   return (
-    <div
-      className="trackList"
-      style={colStyle}
-      onMouseLeave={() => onHover(null)}
-    >
+    <div className="trackList" style={colStyle}>
       <div className="col-header">
         <div className="trackBox1">
           <CheckAllBox tracks={tracks} checks={checks} />

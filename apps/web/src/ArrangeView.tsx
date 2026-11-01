@@ -400,6 +400,7 @@ export function ArrangeShell({
   onAddApiChange,
   onArrangementPlayingChange,
   stopToken,
+  onHoverTrack,
   openRequest,
   onCheckTracks,
 }: {
@@ -411,6 +412,8 @@ export function ArrangeShell({
   onAddApiChange: (api: ArrangeAddApi | null) => void;
   onArrangementPlayingChange: (playing: boolean) => void;
   stopToken: number;
+  /** Pointer entered a clip of this track (drives the info card). */
+  onHoverTrack: (trackId: string) => void;
   /** Open this arrangement (e.g. one just created from checked tracks). */
   openRequest: { id: string; seq: number } | null;
   /** Replace the library's checked tracks with these track ids. */
@@ -507,6 +510,7 @@ export function ArrangeShell({
         onError={onError}
         onAddApiChange={onAddApiChange}
         onCheckTracks={onCheckTracks}
+        onHoverTrack={onHoverTrack}
         onArrangementPlayingChange={onArrangementPlayingChange}
         stopToken={stopToken}
       />
@@ -675,6 +679,7 @@ function ArrangeEditor({
   onError,
   onAddApiChange,
   onCheckTracks,
+  onHoverTrack,
   onArrangementPlayingChange,
   stopToken,
 }: {
@@ -687,6 +692,7 @@ function ArrangeEditor({
   onError: (message: string | null) => void;
   onAddApiChange: (api: ArrangeAddApi | null) => void;
   onCheckTracks: (trackIds: string[]) => void;
+  onHoverTrack: (trackId: string) => void;
   onArrangementPlayingChange: (playing: boolean) => void;
   stopToken: number;
 }) {
@@ -1668,6 +1674,7 @@ function ArrangeEditor({
                         .filter(Boolean)
                         .join(" ")}
                       onClick={() => selectClip(clip.instanceId)}
+                      onMouseEnter={() => onHoverTrack(clip.trackId)}
                     >
                       <div className="arr-row-meta">
                         <span

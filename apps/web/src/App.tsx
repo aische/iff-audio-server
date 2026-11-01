@@ -166,6 +166,8 @@ function StudioShell({
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState<Track | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Last hovered track (library row or arrangement clip); never cleared, so
+  // the info card keeps showing it after the pointer moves on.
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterId>("all");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
@@ -284,10 +286,11 @@ function StudioShell({
     tagFilter,
   });
   const visible = sortTracks(filtered, sort);
-  // Hover previews a row; otherwise the selected row stays shown.
+  // Last hovered track wins; the selected row is only the initial fallback.
+  // Looked up in all tracks: arrangement clips may be filtered out of the list.
   const inspectedId = hoveredId ?? selectedId;
   const inspected = inspectedId
-    ? (visible.find((t) => t.id === inspectedId) ?? null)
+    ? (tracks.find((t) => t.id === inspectedId) ?? null)
     : null;
   const visibleTotalSec = visible.reduce(
     (sum, t) => sum + (t.durationSeconds ?? 0),
@@ -523,6 +526,7 @@ function StudioShell({
               onAddApiChange={setArrangeApi}
               onArrangementPlayingChange={onArrangementPlayingChange}
               stopToken={stopToken}
+              onHoverTrack={setHoveredId}
               openRequest={openArrangement}
               onCheckTracks={(ids) => setCheckedIds(new Set(ids))}
             />
