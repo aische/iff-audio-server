@@ -639,6 +639,27 @@ function parseClips(raw: unknown): ArrangementClip[] | null {
   return out;
 }
 
+/** Parse request clips and check that every referenced track exists. */
+async function parseClipsForTracks(
+  raw: unknown,
+): Promise<
+  { ok: true; clips: ArrangementClip[] } | { ok: false; error: string }
+> {
+  const clips = parseClips(raw);
+  if (!clips) return { ok: false, error: "invalid clips" };
+  if (clips.length > 0) {
+    const ids = [...new Set(clips.map((c) => c.trackId))];
+    const found = await db
+      .select({ id: tracks.id })
+      .from(tracks)
+      .where(inArray(tracks.id, ids));
+    if (found.length !== ids.length) {
+      return { ok: false, error: "one or more tracks not found" };
+    }
+  }
+  return { ok: true, clips };
+}
+
 /** Ensure stored JSON (possibly legacy) is always returned in new shape. */
 function normalizeStoredClips(clips: unknown): ArrangementClip[] {
   return parseClips(clips) ?? [];
@@ -725,15 +746,29 @@ app.get("/arrangements", async (request, reply) => {
   }));
 });
 
-app.post<{ Body: { name?: string } }>(
+app.post<{ Body: { name?: string; clips?: unknown } }>(
   "/arrangements",
-  { schema: { body: bodyOf({ name: arrangementName }) } },
+  {
+    schema: {
+      body: bodyOf({
+        name: arrangementName,
+        clips: { type: "array", maxItems: 2000 },
+      }),
+    },
+  },
   async (request, reply) => {
     const userId = requireUser(request);
     if (!userId) return reply.code(401).send({ error: "unauthorized" });
 
     const name = request.body?.name?.trim();
     if (!name) return reply.code(400).send({ error: "name required" });
+
+    let clips: ArrangementClip[] = [];
+    if (request.body?.clips !== undefined) {
+      const parsed = await parseClipsForTracks(request.body.clips);
+      if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
+      clips = parsed.clips;
+    }
 
     const [existing] = await db
       .select({ id: arrangements.id })
@@ -746,7 +781,7 @@ app.post<{ Body: { name?: string } }>(
 
     const [row] = await db
       .insert(arrangements)
-      .values({ userId, name, clips: [] })
+      .values({ userId, name, clips })
       .returning();
 
     const withOwner = await arrangementWithOwner(row.id);
@@ -851,19 +886,9 @@ app.put<{
     }
 
     if (request.body?.clips !== undefined) {
-      const clips = parseClips(request.body.clips);
-      if (!clips) return reply.code(400).send({ error: "invalid clips" });
-      if (clips.length > 0) {
-        const ids = [...new Set(clips.map((c) => c.trackId))];
-        const found = await db
-          .select({ id: tracks.id })
-          .from(tracks)
-          .where(inArray(tracks.id, ids));
-        if (found.length !== ids.length) {
-          return reply.code(400).send({ error: "one or more tracks not found" });
-        }
-      }
-      patch.clips = clips;
+      const parsed = await parseClipsForTracks(request.body.clips);
+      if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
+      patch.clips = parsed.clips;
     }
 
     if (patch.name === undefined && patch.clips === undefined) {

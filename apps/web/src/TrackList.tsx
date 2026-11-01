@@ -49,12 +49,118 @@ export type TrackListFilters = {
   onToggleSort: (key: SortKey) => void;
 };
 
+/** Checked tracks across all filters (hidden ones included). */
+export type CheckedSummary = {
+  count: number;
+  totalSec: number;
+  /** Checked tracks the current filters hide. */
+  hiddenCount: number;
+  onClear: () => void;
+  /** Create an arrangement from the checked tracks; rejects on failure. */
+  onCreateArrangement: (name: string) => Promise<void>;
+};
+
+/** Per-row checkbox state for the track list. */
+export type TrackChecks = {
+  checkedIds: ReadonlySet<string>;
+  onToggle: (trackId: string) => void;
+  onSetMany: (trackIds: string[], checked: boolean) => void;
+};
+
+function CheckedBar({ checked }: { checked: CheckedSummary }) {
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  if (checked.count === 0) return null;
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setBusy(true);
+    try {
+      await checked.onCreateArrangement(trimmed);
+      setName("");
+      setNaming(false);
+    } catch {
+      // Parent reports the error; keep the form open to retry.
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <span className="checked-bar">
+      <span
+        className="checked-meta"
+        title={
+          checked.hiddenCount > 0
+            ? `${checked.hiddenCount} checked track(s) are hidden by the current filters but still count`
+            : undefined
+        }
+      >
+        ☑ {checked.count} checked · {formatDuration(Math.floor(checked.totalSec))}
+        {checked.hiddenCount > 0 && (
+          <span className="checked-hidden"> · {checked.hiddenCount} hidden</span>
+        )}
+      </span>
+      {naming ? (
+        <form className="checked-create" onSubmit={onSubmit}>
+          <input
+            autoFocus
+            value={name}
+            disabled={busy}
+            maxLength={200}
+            placeholder="arrangement name"
+            aria-label="New arrangement name"
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setNaming(false);
+            }}
+          />
+          <button type="submit" className="filterButton" disabled={busy}>
+            {busy ? "creating…" : "create"}
+          </button>
+          <button
+            type="button"
+            className="filterButton"
+            disabled={busy}
+            onClick={() => setNaming(false)}
+          >
+            ×
+          </button>
+        </form>
+      ) : (
+        <button
+          type="button"
+          className="filterButton"
+          title="Create an arrangement from the checked tracks, in list order"
+          onClick={() => setNaming(true)}
+        >
+          new arrangement
+        </button>
+      )}
+      <button
+        type="button"
+        className="filterButton"
+        title="Uncheck all tracks"
+        onClick={checked.onClear}
+      >
+        uncheck
+      </button>
+    </span>
+  );
+}
+
 export function FilterBar({
   filters,
+  checked,
   mode,
   showOthersToggle,
 }: {
   filters: TrackListFilters;
+  checked: CheckedSummary;
   mode: AppMode;
   showOthersToggle: boolean;
 }) {
@@ -146,7 +252,40 @@ export function FilterBar({
           {showOthers ? "others on" : "others off"}
         </button>
       )}
+      <CheckedBar checked={checked} />
     </div>
+  );
+}
+
+/** Header checkbox: checks/unchecks every visible, present track. */
+function CheckAllBox({
+  tracks,
+  checks,
+}: {
+  tracks: Track[];
+  checks: TrackChecks;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const ids = tracks.filter((t) => t.present).map((t) => t.id);
+  const n = ids.filter((id) => checks.checkedIds.has(id)).length;
+  const all = ids.length > 0 && n === ids.length;
+  const some = n > 0 && !all;
+
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = some;
+  }, [some]);
+
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className="track-check"
+      checked={all}
+      disabled={ids.length === 0}
+      title={all ? "Uncheck all shown tracks" : "Check all shown tracks"}
+      aria-label={all ? "Uncheck all shown tracks" : "Check all shown tracks"}
+      onChange={() => checks.onSetMany(ids, !all)}
+    />
   );
 }
 
@@ -287,11 +426,13 @@ function TrackRow({
   mode,
   playing,
   selected,
+  checked,
   showOthers,
   showComments,
   tagFilter,
   draggable,
   onTogglePlay,
+  onToggleChecked,
   onSelect,
   onHover,
   onTagClick,
@@ -305,11 +446,13 @@ function TrackRow({
   mode: AppMode;
   playing: boolean;
   selected: boolean;
+  checked: boolean;
   showOthers: boolean;
   showComments: boolean;
   tagFilter: string | null;
   draggable: boolean;
   onTogglePlay: () => void;
+  onToggleChecked: () => void;
   onSelect: () => void;
   onHover: () => void;
   onTagClick: (tag: string) => void;
@@ -388,6 +531,7 @@ function TrackRow({
         mode === "arrange" ? "track1-compact" : "",
         playing ? "track-playing" : "",
         selected ? "track-selected" : "",
+        checked && track.present ? "track-checked" : "",
         !track.present ? "track-missing" : "",
       ]
         .filter(Boolean)
@@ -418,6 +562,16 @@ function TrackRow({
       }}
     >
       <div className="trackBox1">
+        <input
+          type="checkbox"
+          className="track-check"
+          checked={checked && track.present}
+          disabled={!track.present}
+          title={checked ? "Uncheck" : "Check"}
+          aria-label={`${checked ? "Uncheck" : "Check"} ${track.filename}`}
+          onClick={(e) => e.stopPropagation()}
+          onChange={onToggleChecked}
+        />
         <button
           type="button"
           className={playing ? "track-play track-play-active" : "track-play"}
@@ -558,6 +712,7 @@ export function TrackList({
   mode,
   playingId,
   selectedId,
+  checks,
   showOthers,
   tagFilter,
   sort,
@@ -578,6 +733,7 @@ export function TrackList({
   mode: AppMode;
   playingId: string | null;
   selectedId: string | null;
+  checks: TrackChecks;
   showOthers: boolean;
   tagFilter: string | null;
   sort: PoolSort;
@@ -632,6 +788,7 @@ export function TrackList({
     >
       <div className="col-header">
         <div className="trackBox1">
+          <CheckAllBox tracks={tracks} checks={checks} />
           <span className="track-play-spacer" aria-hidden />
           <SortHeader
             className="trackDur"
@@ -688,12 +845,16 @@ export function TrackList({
           mode={mode}
           playing={playingId === track.id}
           selected={selectedId === track.id}
+          checked={checks.checkedIds.has(track.id)}
           showOthers={showOthers}
           showComments={showComments}
           tagFilter={tagFilter}
           draggable={canDragToArrange && track.present}
           onTogglePlay={() => {
             if (track.present) onTogglePlay(track);
+          }}
+          onToggleChecked={() => {
+            if (track.present) checks.onToggle(track.id);
           }}
           onSelect={() => onSelect(track)}
           onHover={() => onHover(track.id)}

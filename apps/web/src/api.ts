@@ -162,10 +162,10 @@ export const api = {
 
   listArrangements: () => request<ArrangementSummary[]>("/arrangements"),
 
-  createArrangement: (name: string) =>
+  createArrangement: (name: string, clips?: ArrangementClip[]) =>
     request<Arrangement>("/arrangements", {
       method: "POST",
-      json: { name },
+      json: clips ? { name, clips } : { name },
     }),
 
   getArrangement: (id: string) => request<Arrangement>(`/arrangements/${id}`),

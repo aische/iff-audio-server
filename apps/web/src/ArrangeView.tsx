@@ -32,6 +32,7 @@ import {
   type PlaybackMode,
 } from "./arrangePlayback";
 import { formatClock, shortTitle } from "./format";
+import { newClipForTrack } from "./clips";
 import { TRACK_MIME, CLIP_MIME } from "./mime";
 
 const AUTOSAVE_MS = 600;
@@ -158,10 +159,6 @@ function RowPlayhead({
   );
   if (left == null) return null;
   return <div className="arr-row-playhead" style={{ left }} />;
-}
-
-function newInstanceId() {
-  return crypto.randomUUID();
 }
 
 function formatPxPerSec(n: number) {
@@ -403,6 +400,7 @@ export function ArrangeShell({
   onAddApiChange,
   onArrangementPlayingChange,
   stopToken,
+  openRequest,
 }: {
   user: User;
   tracks: Track[];
@@ -412,10 +410,21 @@ export function ArrangeShell({
   onAddApiChange: (api: ArrangeAddApi | null) => void;
   onArrangementPlayingChange: (playing: boolean) => void;
   stopToken: number;
+  /** Open this arrangement (e.g. one just created from checked tracks). */
+  openRequest: { id: string; seq: number } | null;
 }) {
   const [list, setList] = useState<ArrangementSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(
+    () => openRequest?.id ?? null,
+  );
+  const [handledOpenSeq, setHandledOpenSeq] = useState(
+    () => openRequest?.seq ?? 0,
+  );
+  if (openRequest && openRequest.seq !== handledOpenSeq) {
+    setHandledOpenSeq(openRequest.seq);
+    setActiveId(openRequest.id);
+  }
   const [newName, setNewName] = useState("");
   const [copyingId, setCopyingId] = useState<string | null>(null);
 
@@ -1226,20 +1235,9 @@ function ArrangeEditor({
     : null;
 
   function addTrack(trackId: string, atIndex?: number) {
-    const track = trackById.get(trackId);
-    if (!track?.present) return;
-    const dur =
-      track.durationSeconds != null && track.durationSeconds > 0
-        ? track.durationSeconds
-        : 60;
-    const item: ArrangementClip = {
-      instanceId: newInstanceId(),
-      trackId,
-      inSec: 0,
-      outSec: dur,
-      pauseSec: 0,
-      gain: 1,
-    };
+    const item = newClipForTrack(trackById.get(trackId));
+    if (!item) return;
+    const dur = item.outSec;
     setClips((prev) => {
       if (atIndex == null || atIndex < 0 || atIndex >= prev.length) {
         return [...prev, item];

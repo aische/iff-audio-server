@@ -232,6 +232,45 @@ body {
   margin-left: 4px;
 }
 
+.checked-bar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+}
+
+.checked-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  margin-right: 2px;
+}
+
+.checked-hidden {
+  color: var(--danger);
+}
+
+.checked-create {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.checked-create input {
+  font: inherit;
+  font-size: 12px;
+  width: 160px;
+  padding: 2px 6px;
+  border: 1px solid var(--accent-line);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 0;
+}
+
 .tagButton {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -645,6 +684,10 @@ body {
   box-shadow: inset 3px 0 0 var(--line);
 }
 
+.track1.track-checked:not(.track-playing) .trackDur {
+  color: var(--accent);
+}
+
 .track1.track-missing {
   opacity: 0.5;
 }
@@ -697,6 +740,19 @@ body {
   width: auto;
   max-width: none;
   min-width: 0;
+}
+
+.track-check {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  margin: 0 6px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.track-check:disabled {
+  cursor: not-allowed;
 }
 
 .track-play,

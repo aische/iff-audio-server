@@ -7,12 +7,15 @@ import {
   type User,
 } from "./api";
 import { ArrangeShell, type ArrangeAddApi } from "./ArrangeView";
+import { newClipForTrack } from "./clips";
 import { TrackInspector } from "./TrackInspector";
 import Transport from "./Transport";
 import {
   ChangePasswordPanel,
   FilterBar,
   TrackList,
+  type CheckedSummary,
+  type TrackChecks,
 } from "./TrackList";
 import {
   SPLIT_W_DEFAULT,
@@ -178,6 +181,14 @@ function StudioShell({
   );
   const [arrangeApi, setArrangeApi] = useState<ArrangeAddApi | null>(null);
   const [stopToken, setStopToken] = useState(0);
+  // Scratch subset: in memory only, independent of filters.
+  const [checkedIds, setCheckedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [openArrangement, setOpenArrangement] = useState<{
+    id: string;
+    seq: number;
+  } | null>(null);
 
   const splitCol = usePersistedWidth(
     SPLIT_W_KEY,
@@ -283,6 +294,56 @@ function StudioShell({
     0,
   );
 
+  // Missing files can't be played or arranged, so they never count.
+  const checkedTracks = sortTracks(
+    tracks.filter((t) => t.present && checkedIds.has(t.id)),
+    sort,
+  );
+  const visibleIds = new Set(visible.map((t) => t.id));
+
+  const checks: TrackChecks = {
+    checkedIds,
+    onToggle: (id) =>
+      setCheckedIds((prev) => {
+        const next = new Set(prev);
+        if (!next.delete(id)) next.add(id);
+        return next;
+      }),
+    onSetMany: (ids, on) =>
+      setCheckedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of ids) {
+          if (on) next.add(id);
+          else next.delete(id);
+        }
+        return next;
+      }),
+  };
+
+  async function createArrangementFromChecked(name: string) {
+    const clips = checkedTracks.flatMap((t) => newClipForTrack(t) ?? []);
+    try {
+      const row = await api.createArrangement(name, clips);
+      onError(null);
+      setOpenArrangement((prev) => ({ id: row.id, seq: (prev?.seq ?? 0) + 1 }));
+      setModePersist("arrange");
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to create");
+      throw err;
+    }
+  }
+
+  const checked: CheckedSummary = {
+    count: checkedTracks.length,
+    totalSec: checkedTracks.reduce(
+      (sum, t) => sum + (t.durationSeconds ?? 0),
+      0,
+    ),
+    hiddenCount: checkedTracks.filter((t) => !visibleIds.has(t.id)).length,
+    onClear: () => setCheckedIds(new Set()),
+    onCreateArrangement: createArrangementFromChecked,
+  };
+
   const filters = {
     filter,
     tagFilter,
@@ -371,6 +432,7 @@ function StudioShell({
         <div className="toolbar">
           <FilterBar
             filters={filters}
+            checked={checked}
             mode={mode}
             showOthersToggle
           />
@@ -410,6 +472,7 @@ function StudioShell({
               mode={mode}
               playingId={playing?.id ?? null}
               selectedId={selectedId}
+              checks={checks}
               showOthers={showOthers}
               tagFilter={tagFilter}
               sort={sort}
@@ -460,6 +523,7 @@ function StudioShell({
               onAddApiChange={setArrangeApi}
               onArrangementPlayingChange={onArrangementPlayingChange}
               stopToken={stopToken}
+              openRequest={openArrangement}
             />
           </div>
         )}
