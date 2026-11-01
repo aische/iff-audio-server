@@ -1492,6 +1492,9 @@ function ArrangeEditor({
   }
 
   const skippedCount = clips.filter((c) => skippedIds.has(c.instanceId)).length;
+  const releasedClips = clips.filter(
+    (c) => trackById.get(c.trackId)?.releasedOn,
+  );
   const dragging = isOwner && (dragClipId != null || trackDragging);
   const dragClipIndex = dragClipId
     ? clips.findIndex((c) => c.instanceId === dragClipId)
@@ -1629,6 +1632,19 @@ function ArrangeEditor({
           ▶ <PlayheadClock store={playhead} /> / {formatClock(totalSec)} ·{" "}
           {clips.length} clips · {formatPxPerSec(pxPerSec)} px/s
         </span>
+        {releasedClips.length > 0 && (
+          <span
+            className="arr-released-warn"
+            title={`Already released:\n${releasedClips
+              .map((c) => {
+                const t = trackById.get(c.trackId)!;
+                return `${shortTitle(t.filename)} — ${t.releasedOn}`;
+              })
+              .join("\n")}`}
+          >
+            ⚠ {releasedClips.length} released
+          </span>
+        )}
         {skippedCount > 0 && (
           <button
             type="button"
@@ -1725,6 +1741,7 @@ function ArrangeEditor({
                 const track = trackById.get(clip.trackId);
                 const isSelected = clip.instanceId === selectedId;
                 const isSkipped = skippedIds.has(clip.instanceId);
+                const releasedOn = track?.releasedOn ?? null;
                 const dur = clipDuration(clip);
                 const waveW = Math.max(48, dur * pxPerSec);
                 const pauseW =
@@ -1755,6 +1772,7 @@ function ArrangeEditor({
                         "arr-row",
                         isSelected ? "arr-row-selected" : "",
                         isSkipped ? "arr-row-skipped" : "",
+                        releasedOn ? "arr-row-released" : "",
                         dragClipId === clip.instanceId
                           ? "arr-row-dragging"
                           : "",
@@ -1864,6 +1882,14 @@ function ArrangeEditor({
                         >
                           {track ? shortTitle(track.filename) : "?"}
                         </span>
+                        {releasedOn && (
+                          <span
+                            className="arr-row-released-badge"
+                            title={`Already released on ${releasedOn}`}
+                          >
+                            released: {releasedOn}
+                          </span>
+                        )}
                         <label className="arr-row-field">
                           pause
                           <input

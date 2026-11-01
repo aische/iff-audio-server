@@ -55,6 +55,8 @@ export type CheckedSummary = {
   totalSec: number;
   /** Checked tracks the current filters hide. */
   hiddenCount: number;
+  /** Checked tracks that are already released. */
+  releasedCount: number;
   onClear: () => void;
   /** Create an arrangement from the checked tracks; rejects on failure. */
   onCreateArrangement: (name: string) => Promise<void>;
@@ -103,6 +105,15 @@ function CheckedBar({ checked }: { checked: CheckedSummary }) {
         ☑ {checked.count} checked · {formatDuration(Math.floor(checked.totalSec))}
         {checked.hiddenCount > 0 && (
           <span className="checked-hidden"> · {checked.hiddenCount} hidden</span>
+        )}
+        {checked.releasedCount > 0 && (
+          <span
+            className="checked-released"
+            title="Some checked tracks are already released"
+          >
+            {" "}
+            · ⚠ {checked.releasedCount} released
+          </span>
         )}
       </span>
       {naming ? (
