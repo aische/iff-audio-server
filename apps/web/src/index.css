@@ -24,6 +24,9 @@
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --title-w: 210px;
   --comment-w: 300px;
+  /* Inspector card: fixed max height so the list can reserve room for it. */
+  --inspector-max-h: min(320px, 45svh);
+  --inspector-gap: 12px;
 
   color: var(--text);
   background: var(--bg);
@@ -364,6 +367,124 @@ body {
   overscroll-behavior: contain;
 }
 
+/* ——— track inspector (hovered / selected track details) ——— */
+
+.inspector {
+  position: fixed;
+  right: var(--inspector-gap);
+  bottom: var(--inspector-gap);
+  z-index: 10;
+  width: min(380px, calc(100vw - 2 * var(--inspector-gap)));
+  max-height: var(--inspector-max-h);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-raised) 94%, transparent);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent-line);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 45%);
+  /* Read-only: never steal clicks / hovers from the rows beneath. */
+  pointer-events: none;
+}
+
+.inspector-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.inspector-title {
+  font-weight: 700;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.inspector-filename {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.inspector-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.inspector-released {
+  color: var(--accent);
+}
+
+.inspector-missing {
+  color: var(--danger);
+}
+
+.inspector-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.inspector-tags .inspector-tag {
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  font-size: 11px;
+}
+
+.inspector-tag {
+  color: var(--accent);
+}
+
+.inspector-empty {
+  padding-bottom: 10px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* Long threads clip with a fade; bottom padding keeps short ones unfaded. */
+.inspector-comments {
+  list-style: none;
+  margin: 0;
+  padding: 8px 0 20px;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--line-soft);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+}
+
+.inspector-comment-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.inspector-author {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-comment-body {
+  font-weight: 400;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .studio-split .studio-left {
   border-right: none;
 }
@@ -399,9 +520,10 @@ body {
 
 /* ——— track list ——— */
 
+/* Bottom room so the last rows can scroll clear of the inspector card. */
 .trackList {
   background: var(--bg);
-  padding-bottom: 1.5rem;
+  padding-bottom: calc(var(--inspector-max-h) + 2 * var(--inspector-gap));
 }
 
 .col-header {
@@ -1449,5 +1571,14 @@ body {
 
   .other-comments {
     margin-left: 0;
+  }
+
+  /* No hover on touch; a pinned card would cover too much of a small list. */
+  .inspector {
+    display: none;
+  }
+
+  .trackList {
+    padding-bottom: 1.5rem;
   }
 }

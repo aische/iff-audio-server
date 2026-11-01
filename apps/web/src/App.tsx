@@ -7,6 +7,7 @@ import {
   type User,
 } from "./api";
 import { ArrangeShell, type ArrangeAddApi } from "./ArrangeView";
+import { TrackInspector } from "./TrackInspector";
 import Transport from "./Transport";
 import {
   ChangePasswordPanel,
@@ -162,6 +163,7 @@ function StudioShell({
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState<Track | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterId>("all");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [showOthers, setShowOthers] = useState(readShowOthers);
@@ -271,6 +273,11 @@ function StudioShell({
     tagFilter,
   });
   const visible = sortTracks(filtered, sort);
+  // Hover previews a row; otherwise the selected row stays shown.
+  const inspectedId = hoveredId ?? selectedId;
+  const inspected = inspectedId
+    ? (visible.find((t) => t.id === inspectedId) ?? null)
+    : null;
   const visibleTotalSec = visible.reduce(
     (sum, t) => sum + (t.durationSeconds ?? 0),
     0,
@@ -412,6 +419,7 @@ function StudioShell({
               loading={loading}
               onTogglePlay={togglePlayTrack}
               onSelect={(t) => setSelectedId(t.id)}
+              onHover={setHoveredId}
               onTagClick={setTagFilter}
               onToggleSort={toggleSort}
               onCommentsChange={patchTrackComments}
@@ -456,6 +464,8 @@ function StudioShell({
           </div>
         )}
       </div>
+
+      {inspected && <TrackInspector track={inspected} user={user} />}
     </div>
   );
 }

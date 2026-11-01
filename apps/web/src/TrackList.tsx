@@ -293,6 +293,7 @@ function TrackRow({
   draggable,
   onTogglePlay,
   onSelect,
+  onHover,
   onTagClick,
   onCommentsChange,
   onReleasedOnChange,
@@ -310,6 +311,7 @@ function TrackRow({
   draggable: boolean;
   onTogglePlay: () => void;
   onSelect: () => void;
+  onHover: () => void;
   onTagClick: (tag: string) => void;
   onCommentsChange: (comments: Comment[]) => void;
   onReleasedOnChange: (releasedOn: string | null) => void;
@@ -401,6 +403,7 @@ function TrackRow({
         e.dataTransfer.effectAllowed = "copy";
       }}
       onClick={onSelect}
+      onMouseEnter={onHover}
       onDoubleClick={(e) => {
         // Double-clicking a control inside the row is not "add this track".
         if (
@@ -562,6 +565,7 @@ export function TrackList({
   loading,
   onTogglePlay,
   onSelect,
+  onHover,
   onTagClick,
   onToggleSort,
   onCommentsChange,
@@ -581,6 +585,8 @@ export function TrackList({
   loading: boolean;
   onTogglePlay: (track: Track) => void;
   onSelect: (track: Track) => void;
+  /** Hovered row; null once the pointer leaves the list. */
+  onHover: (trackId: string | null) => void;
   onTagClick: (tag: string) => void;
   onToggleSort: (key: SortKey) => void;
   onCommentsChange: (trackId: string, comments: Comment[]) => void;
@@ -619,7 +625,11 @@ export function TrackList({
   }
 
   return (
-    <div className="trackList" style={colStyle}>
+    <div
+      className="trackList"
+      style={colStyle}
+      onMouseLeave={() => onHover(null)}
+    >
       <div className="col-header">
         <div className="trackBox1">
           <span className="track-play-spacer" aria-hidden />
@@ -686,6 +696,7 @@ export function TrackList({
             if (track.present) onTogglePlay(track);
           }}
           onSelect={() => onSelect(track)}
+          onHover={() => onHover(track.id)}
           onTagClick={onTagClick}
           onCommentsChange={(next) => onCommentsChange(track.id, next)}
           onReleasedOnChange={(releasedOn) =>
