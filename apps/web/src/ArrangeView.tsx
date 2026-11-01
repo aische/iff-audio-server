@@ -717,6 +717,10 @@ function ArrangeEditor({
   /** When set, transport stops at this arrangement time (solo clip audition). */
   const [soloEndSec, setSoloEndSec] = useState<number | null>(null);
   const [soloClipId, setSoloClipId] = useState<string | null>(null);
+  /** Clip instances left out of playback. Temporary: never saved. */
+  const [skippedIds, setSkippedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
 
   const clipsRef = useLatestRef(clips);
   const playRef = useLatestRef(playing);
@@ -750,7 +754,10 @@ function ArrangeEditor({
   }, [tracks]);
 
   const isOwner = arrangement?.userId === user.id;
-  const { segs, totalSec } = useMemo(() => buildSchedule(clips), [clips]);
+  const { segs, totalSec } = useMemo(
+    () => buildSchedule(clips.filter((c) => !skippedIds.has(c.instanceId))),
+    [clips, skippedIds],
+  );
   const segsRef = useLatestRef(segs);
   const totalSecRef = useLatestRef(totalSec);
 
@@ -766,6 +773,7 @@ function ArrangeEditor({
         setClips(row.clips);
         setName(row.name);
         setSelectedId(null);
+        setSkippedIds(new Set());
         playhead.set(0);
         setPlaying(false);
         setSaveState("idle");
@@ -1382,6 +1390,73 @@ function ArrangeEditor({
     syncAudio(clamped, true);
   }
 
+  /**
+   * Skip or unskip a clip. The playhead stays on the clip it was in; if that
+   * clip is the one being skipped, it moves to the start of the next clip.
+   */
+  function setSkipped(ids: ReadonlySet<string>) {
+    const at = playhead.get();
+    const cur = segs.find((s) => at >= s.arrStart && at < s.arrEnd);
+    const next = buildSchedule(clips.filter((c) => !ids.has(c.instanceId)));
+    setSkippedIds(ids);
+    // Rendering catches the refs up too, but the transport may tick first.
+    segsRef.current = next.segs;
+    totalSecRef.current = next.totalSec;
+
+    let stopped = false;
+    if (soloClipId != null) {
+      const soloSeg = next.segs.find(
+        (s) => s.kind === "audio" && s.clip.instanceId === soloClipId,
+      );
+      if (!soloSeg) {
+        stopTransport();
+        stopped = true;
+      } else {
+        soloEndRef.current = soloSeg.arrEnd;
+        setSoloEndSec(soloSeg.arrEnd);
+      }
+    }
+
+    let target = at >= totalSec ? next.totalSec : Math.min(at, next.totalSec);
+    let jumped = false;
+    if (cur) {
+      const same = next.segs.find(
+        (s) => s.kind === cur.kind && s.clip.instanceId === cur.clip.instanceId,
+      );
+      if (same) {
+        target = same.arrStart + (at - cur.arrStart);
+      } else {
+        const from = clips.findIndex(
+          (c) => c.instanceId === cur.clip.instanceId,
+        );
+        const after = clips
+          .slice(from + 1)
+          .find((c) => !ids.has(c.instanceId));
+        const afterSeg = after
+          ? next.segs.find(
+              (s) => s.kind === "audio" && s.clip.instanceId === after.instanceId,
+            )
+          : undefined;
+        target = afterSeg ? afterSeg.arrStart : next.totalSec;
+        jumped = true;
+      }
+    }
+    setPlayheadSec(target);
+    if (!playRef.current || stopped) return;
+    if (jumped) {
+      syncAudio(target, true);
+    } else {
+      // Same audio position, new timeline: not a seek.
+      lastSyncAtRef.current = target;
+    }
+  }
+
+  function toggleSkip(instanceId: string) {
+    const ids = new Set(skippedIds);
+    if (!ids.delete(instanceId)) ids.add(instanceId);
+    setSkipped(ids);
+  }
+
   /** Play full arrangement from current playhead (clears solo). */
   function toggleArrangementPlay() {
     if (playing) {
@@ -1416,6 +1491,7 @@ function ArrangeEditor({
     }
   }
 
+  const skippedCount = clips.filter((c) => skippedIds.has(c.instanceId)).length;
   const dragging = isOwner && (dragClipId != null || trackDragging);
   const dragClipIndex = dragClipId
     ? clips.findIndex((c) => c.instanceId === dragClipId)
@@ -1553,6 +1629,16 @@ function ArrangeEditor({
           ▶ <PlayheadClock store={playhead} /> / {formatClock(totalSec)} ·{" "}
           {clips.length} clips · {formatPxPerSec(pxPerSec)} px/s
         </span>
+        {skippedCount > 0 && (
+          <button
+            type="button"
+            className="filterButton"
+            title="Play all clips again"
+            onClick={() => setSkipped(new Set())}
+          >
+            unskip {skippedCount}
+          </button>
+        )}
         <span className="arr-clip-times" aria-live="polite">
           {selected
             ? `in ${formatClock(selected.inSec)} – out ${formatClock(selected.outSec)} · ${formatClock(clipDuration(selected))} · pause ${formatClock(selected.pauseSec)} · ×${selected.gain.toFixed(2)}`
@@ -1638,6 +1724,7 @@ function ArrangeEditor({
               {clips.map((clip, index) => {
                 const track = trackById.get(clip.trackId);
                 const isSelected = clip.instanceId === selectedId;
+                const isSkipped = skippedIds.has(clip.instanceId);
                 const dur = clipDuration(clip);
                 const waveW = Math.max(48, dur * pxPerSec);
                 const pauseW =
@@ -1667,6 +1754,7 @@ function ArrangeEditor({
                       className={[
                         "arr-row",
                         isSelected ? "arr-row-selected" : "",
+                        isSkipped ? "arr-row-skipped" : "",
                         dragClipId === clip.instanceId
                           ? "arr-row-dragging"
                           : "",
@@ -1711,14 +1799,36 @@ function ArrangeEditor({
                           ⠿
                         </span>
                         <span className="arr-row-index">{index + 1}</span>
+                        <label
+                          className="arr-row-skip"
+                          title={
+                            isSkipped
+                              ? "Skipped: playback leaves this clip out (not saved)"
+                              : "Skip this clip in playback (not saved)"
+                          }
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            className="track-check"
+                            checked={isSkipped}
+                            onChange={() => toggleSkip(clip.instanceId)}
+                          />
+                          skip
+                        </label>
                         <button
                           type="button"
+                          disabled={isSkipped}
                           className={
                             playing && soloClipId === clip.instanceId
                               ? "filterButton filterSelected arr-row-play"
                               : "filterButton arr-row-play"
                           }
-                          title="Play this clip from selection start"
+                          title={
+                            isSkipped
+                              ? "Skipped clips don't play"
+                              : "Play this clip from selection start"
+                          }
                           onClick={(e) => {
                             e.stopPropagation();
                             playClipSelection(clip);
