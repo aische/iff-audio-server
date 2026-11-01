@@ -690,6 +690,8 @@ function ArrangeEditor({
   const [copying, setCopying] = useState(false);
   const [peaksVersion, setPeaksVersion] = useState(0);
   const [dragClipId, setDragClipId] = useState<string | null>(null);
+  /** A track from the library is being dragged (drop targets light up). */
+  const [trackDragging, setTrackDragging] = useState(false);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   /** When set, transport stops at this arrangement time (solo clip audition). */
   const [soloEndSec, setSoloEndSec] = useState<number | null>(null);
@@ -1314,6 +1316,32 @@ function ArrangeEditor({
     setDropIndex(null);
   }
 
+  // Library rows live in another panel; watch drags at the window level so
+  // the sequence can show its drop targets while one is in flight.
+  useEffect(() => {
+    const onStart = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes(TRACK_MIME)) setTrackDragging(true);
+    };
+    const onEnd = () => {
+      setTrackDragging(false);
+      setDropIndex(null);
+    };
+    window.addEventListener("dragstart", onStart);
+    window.addEventListener("dragend", onEnd);
+    window.addEventListener("drop", onEnd);
+    return () => {
+      window.removeEventListener("dragstart", onStart);
+      window.removeEventListener("dragend", onEnd);
+      window.removeEventListener("drop", onEnd);
+    };
+  }, []);
+
+  /** Insert before a row when over its top half, after it otherwise. */
+  function rowInsertIndex(e: React.DragEvent<HTMLElement>, index: number) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return e.clientY < rect.top + rect.height / 2 ? index : index + 1;
+  }
+
   function onSequenceDrop(e: React.DragEvent, insertIndex: number) {
     e.preventDefault();
     e.stopPropagation();
@@ -1376,6 +1404,27 @@ function ArrangeEditor({
     } else {
       syncAudio(seg.arrStart, true);
     }
+  }
+
+  const dragging = isOwner && (dragClipId != null || trackDragging);
+  const dragClipIndex = dragClipId
+    ? clips.findIndex((c) => c.instanceId === dragClipId)
+    : -1;
+
+  /**
+   * Drop slot `i` inserts before clip `i`. While dragging, every slot that
+   * would change the order is outlined; the one under the pointer is filled.
+   * Slots on either side of a dragged clip would not move it, so stay hidden.
+   */
+  function dropSlotClass(i: number) {
+    const noop =
+      dragClipIndex >= 0 && (i === dragClipIndex || i === dragClipIndex + 1);
+    const classes = ["arr-drop-slot"];
+    if (dragging && !noop) {
+      classes.push("arr-drop-target");
+      if (dropIndex === i) classes.push("arr-drop-target-active");
+    }
+    return classes.join(" ");
   }
 
   if (!arrangement) {
@@ -1524,13 +1573,37 @@ function ArrangeEditor({
               : "arr-sequence-wrap arr-sequence-readonly"
           }
           onDragOver={(e) => {
-            if (isOwner) e.preventDefault();
+            if (!isOwner) return;
+            e.preventDefault();
+            // Bare padding around the rows drops at the end.
+            if (e.target === e.currentTarget) setDropIndex(clips.length);
+          }}
+          onDragLeave={(e) => {
+            if (
+              !(e.relatedTarget instanceof Node) ||
+              !e.currentTarget.contains(e.relatedTarget)
+            ) {
+              setDropIndex(null);
+            }
           }}
           onDrop={(e) => onSequenceDrop(e, clips.length)}
           onDragEnd={clearDrag}
         >
           {clips.length === 0 ? (
-            <div className="arr-sequence-empty">
+            <div
+              className={[
+                "arr-sequence-empty",
+                dragging ? "arr-drop-target" : "",
+                dragging && dropIndex === 0 ? "arr-drop-target-active" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              onDragOver={(e) => {
+                if (!isOwner) return;
+                e.preventDefault();
+                setDropIndex(0);
+              }}
+            >
               {isOwner
                 ? "Drag tracks from the library (or double-click) to build the sequence."
                 : "This arrangement has no clips."}
@@ -1538,9 +1611,7 @@ function ArrangeEditor({
           ) : (
             <div
               className={
-                dragClipId
-                  ? "arr-sequence arr-sequence-dragging"
-                  : "arr-sequence"
+                dragging ? "arr-sequence arr-sequence-dragging" : "arr-sequence"
               }
             >
               {clips.map((clip, index) => {
@@ -1559,23 +1630,18 @@ function ArrangeEditor({
                 );
 
                 return (
-                  <div key={clip.instanceId} className="arr-row-block">
-                    <div
-                      className={
-                        dropIndex === index
-                          ? "arr-drop-slot arr-drop-slot-active"
-                          : "arr-drop-slot"
-                      }
-                      onDragOver={(e) => {
-                        if (!isOwner) return;
-                        e.preventDefault();
-                        setDropIndex(index);
-                      }}
-                      onDragLeave={() => {
-                        setDropIndex((i) => (i === index ? null : i));
-                      }}
-                      onDrop={(e) => onSequenceDrop(e, index)}
-                    />
+                  <div
+                    key={clip.instanceId}
+                    className="arr-row-block"
+                    onDragOver={(e) => {
+                      if (!isOwner) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDropIndex(rowInsertIndex(e, index));
+                    }}
+                    onDrop={(e) => onSequenceDrop(e, rowInsertIndex(e, index))}
+                  >
+                    <div className={dropSlotClass(index)} />
                     <div
                       className={[
                         "arr-row",
@@ -1758,18 +1824,12 @@ function ArrangeEditor({
                 );
               })}
               <div
-                className={
-                  dropIndex === clips.length
-                    ? "arr-drop-slot arr-drop-slot-end arr-drop-slot-active"
-                    : "arr-drop-slot arr-drop-slot-end"
-                }
+                className={`${dropSlotClass(clips.length)} arr-drop-slot-end`}
                 onDragOver={(e) => {
                   if (!isOwner) return;
                   e.preventDefault();
+                  e.stopPropagation();
                   setDropIndex(clips.length);
-                }}
-                onDragLeave={() => {
-                  setDropIndex((i) => (i === clips.length ? null : i));
                 }}
                 onDrop={(e) => onSequenceDrop(e, clips.length)}
               />

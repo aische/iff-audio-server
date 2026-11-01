@@ -16,6 +16,10 @@
   --accent-line: rgb(212 160 23 / 55%);
   --danger: #c45c4a;
   --ok: #7a9a5a;
+  /* Drag-and-drop targets */
+  --drop: #9ed98a;
+  --drop-soft: rgb(158 217 138 / 14%);
+  --drop-line: rgba(105, 245, 58, 0.45);
   --font-ui: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --title-w: 210px;
@@ -1021,21 +1025,20 @@ body {
   min-width: min-content;
 }
 
-.arr-sequence.arr-sequence-dragging .arr-drop-slot {
-  height: 12px;
-}
-
 .arr-row-block {
   display: flex;
   flex-direction: column;
 }
 
 .arr-drop-slot {
+  box-sizing: border-box;
   height: 8px;
   margin: 2px 0 2px 28px;
+  border: 1px dashed transparent;
   border-radius: 0;
   transition:
     background 0.1s ease,
+    border-color 0.1s ease,
     height 0.1s ease;
 }
 
@@ -1043,10 +1046,29 @@ body {
   height: 16px;
 }
 
-.arr-drop-slot-active {
-  height: 14px;
-  background: var(--accent-line);
-  box-shadow: 0 0 0 1px var(--accent);
+/* While a track or clip is dragged: outline every place it can land… */
+.arr-drop-slot.arr-drop-target {
+  height: 12px;
+  border-color: var(--drop);
+  opacity: 0.5;
+}
+
+/* …and fill the one the drop will go to. */
+.arr-drop-slot.arr-drop-target-active {
+  height: 18px;
+  opacity: 1;
+  border-style: solid;
+  background: var(--drop-line);
+}
+
+.arr-sequence-empty.arr-drop-target {
+  border: 1px dashed var(--drop);
+  color: var(--text);
+}
+
+.arr-sequence-empty.arr-drop-target-active {
+  border-style: solid;
+  background: var(--drop-soft);
 }
 
 .arr-row {
