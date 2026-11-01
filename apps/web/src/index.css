@@ -1360,6 +1360,33 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.arr-row-skip {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.arr-row-skip .track-check {
+  margin-right: 4px;
+}
+
+.arr-row-skipped .arr-row-skip {
+  color: var(--accent);
+}
+
+.arr-row-skipped .arr-row-name,
+.arr-row-skipped .arr-row-field,
+.arr-row-skipped .arr-row-wave-wrap {
+  opacity: 0.3;
+}
+
+.arr-row-skipped .arr-row-name {
+  text-decoration: line-through;
+}
+
 .arr-row-name {
   font-weight: 600;
   overflow: hidden;
