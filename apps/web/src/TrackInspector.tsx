@@ -38,14 +38,17 @@ function formatDate(iso: string): string {
 /**
  * Read-only detail card for one track (last hovered in the library or the
  * arrangement, else the selected row).
- * Pointer-transparent so it never blocks the rows underneath.
+ * Pointer-transparent (except its hide button) so it never blocks the rows
+ * underneath.
  */
 export function TrackInspector({
   track,
   user,
+  onHide,
 }: {
   track: Track;
   user: User;
+  onHide: () => void;
 }) {
   const title = shortTitle(track.filename);
   const tags = unifiedTags(track.comments.map((c) => c.body));
@@ -57,6 +60,15 @@ export function TrackInspector({
 
   return (
     <aside className="inspector" aria-live="polite" aria-label="Track details">
+      <button
+        type="button"
+        className="inspector-hide"
+        aria-label="Hide track info"
+        title="Hide (toggle with the info button)"
+        onClick={onHide}
+      >
+        ×
+      </button>
       <div className="inspector-head">
         <div className="inspector-title">{title}</div>
         {title !== track.filename && (

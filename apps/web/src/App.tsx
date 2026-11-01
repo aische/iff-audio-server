@@ -25,10 +25,12 @@ import {
   filterTracks,
   persistHideReleased,
   persistMode,
+  persistShowInspector,
   persistShowOthers,
   persistSort,
   readHideReleased,
   readMode,
+  readShowInspector,
   readShowOthers,
   readSort,
   sortTracks,
@@ -174,6 +176,7 @@ function StudioShell({
   const [showOthers, setShowOthers] = useState(readShowOthers);
   const [hideReleased, setHideReleased] = useState(readHideReleased);
   const [sort, setSort] = useState(readSort);
+  const [showInspector, setShowInspector] = useState(readShowInspector);
   const [accountOpen, setAccountOpen] = useState(false);
   const [mode, setMode] = useState<AppMode>(readMode);
   // Mounted on first visit, then kept (hidden in pool mode) so the open
@@ -237,6 +240,11 @@ function StudioShell({
   function setHideReleasedPersist(value: boolean) {
     setHideReleased(value);
     persistHideReleased(value);
+  }
+
+  function setShowInspectorPersist(value: boolean) {
+    setShowInspector(value);
+    persistShowInspector(value);
   }
 
   function toggleSort(key: SortKey) {
@@ -365,7 +373,9 @@ function StudioShell({
   };
 
   return (
-    <div className={`app studio mode-${mode}`}>
+    <div
+      className={`app studio mode-${mode}${showInspector ? " inspector-on" : ""}`}
+    >
       <header className="studio-chrome">
         <div className="studio-brand-row">
           <div className="studio-brand">
@@ -399,6 +409,17 @@ function StudioShell({
             </button>
           </div>
           <div className="toolbar-right">
+            <button
+              type="button"
+              className={
+                showInspector ? "filterButton filterSelected" : "filterButton"
+              }
+              aria-pressed={showInspector}
+              title="Show or hide the track info card"
+              onClick={() => setShowInspectorPersist(!showInspector)}
+            >
+              info
+            </button>
             <span className="user-email">{user.email}</span>
             <button
               type="button"
@@ -535,7 +556,13 @@ function StudioShell({
         )}
       </div>
 
-      {inspected && <TrackInspector track={inspected} user={user} />}
+      {showInspector && inspected && (
+        <TrackInspector
+          track={inspected}
+          user={user}
+          onHide={() => setShowInspectorPersist(false)}
+        />
+      )}
     </div>
   );
 }
