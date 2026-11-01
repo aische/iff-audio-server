@@ -506,6 +506,7 @@ function TrackRow({
         {downloading ? "…" : "↓"}
       </button>
       <div
+        className="release-wrap"
         onClick={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
       >

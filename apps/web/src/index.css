@@ -472,18 +472,23 @@ body {
   background: var(--accent);
 }
 
+/*
+ * Pool and arrange rows share one height: every inline item is centred in a
+ * --row-line tall line (the comment input is exactly that tall).
+ */
 .track1 {
+  --row-line: 18px;
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
   justify-content: flex-start;
-  align-items: flex-start;
+  align-items: center;
   gap: 0 6px;
   font-family: var(--font-mono);
   font-weight: 600;
   font-size: 12px;
   line-height: 16px;
-  padding: 3px 12px 3px 10px;
+  padding: 2px 12px 2px 10px;
   margin: 0;
   border-bottom: 1px solid var(--line-soft);
   background: var(--bg-row);
@@ -496,9 +501,6 @@ body {
 
 .track1.track1-compact {
   flex-wrap: nowrap;
-  align-items: center;
-  padding-top: 2px;
-  padding-bottom: 2px;
   white-space: nowrap;
 }
 
@@ -541,9 +543,8 @@ body {
   flex-shrink: 0;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
-  line-height: 16px;
-  height: 16px;
-  padding-top: 3px;
+  line-height: var(--row-line);
+  height: var(--row-line);
 }
 
 .trackTitle {
@@ -551,7 +552,8 @@ body {
   width: var(--title-w);
   max-width: var(--title-w);
   box-sizing: border-box;
-  padding: 3px 4px 0 0;
+  padding: 0 4px 0 0;
+  line-height: var(--row-line);
   margin: 0;
   border: none;
   background: transparent;
@@ -580,7 +582,6 @@ body {
 
 .track-play {
   height: 16px;
-  margin-top: 2px;
   padding: 0;
   border: 1px solid var(--line);
   background: var(--bg-raised);
@@ -614,12 +615,15 @@ body {
 }
 
 .input_box1 input {
+  display: block;
   box-sizing: border-box;
   width: 100%;
+  height: var(--row-line);
   font: inherit;
   font-weight: 600;
   font-size: 12px;
-  padding: 2px 4px;
+  line-height: 16px;
+  padding: 0 4px;
   border: 1px solid var(--line);
   background: var(--bg);
   color: var(--text);
@@ -655,7 +659,6 @@ body {
   flex-shrink: 0;
   width: 16px;
   height: 16px;
-  margin-top: 2px;
   padding: 0;
   border: 1px solid var(--line);
   background: var(--bg-raised);
@@ -678,11 +681,16 @@ body {
   cursor: not-allowed;
 }
 
+.release-wrap {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
 .release-label {
   flex-shrink: 0;
   max-width: 140px;
   height: 16px;
-  margin-top: 2px;
   padding: 0 4px;
   border: 1px dashed var(--line);
   background: transparent;
@@ -711,22 +719,28 @@ body {
   display: flex;
   gap: 2px;
   align-items: center;
-  margin-top: 1px;
+  height: var(--row-line);
 }
 
 .release-edit input {
+  box-sizing: border-box;
   width: 120px;
+  height: var(--row-line);
   font: inherit;
   font-size: 11px;
-  padding: 1px 4px;
+  line-height: 16px;
+  padding: 0 4px;
   border: 1px solid var(--line);
   background: var(--bg);
   color: var(--text);
 }
 
 .release-btn {
+  box-sizing: border-box;
+  height: var(--row-line);
   font: inherit;
   font-size: 11px;
+  line-height: 16px;
   padding: 0 4px;
   border: 1px solid var(--line);
   background: var(--bg-raised);
@@ -739,7 +753,14 @@ body {
   flex-wrap: wrap;
   gap: 2px;
   align-items: center;
-  padding-top: 1px;
+}
+
+/* Row tags fit inside --row-line; toolbar tags keep their own size. */
+.tag-row .tagButton {
+  box-sizing: border-box;
+  height: 16px;
+  padding: 0 5px;
+  line-height: 14px;
 }
 
 .other-comments {
