@@ -291,7 +291,7 @@ function TrackRow({
   showComments,
   tagFilter,
   draggable,
-  onPlay,
+  onTogglePlay,
   onSelect,
   onTagClick,
   onCommentsChange,
@@ -308,7 +308,7 @@ function TrackRow({
   showComments: boolean;
   tagFilter: string | null;
   draggable: boolean;
-  onPlay: () => void;
+  onTogglePlay: () => void;
   onSelect: () => void;
   onTagClick: (tag: string) => void;
   onCommentsChange: (comments: Comment[]) => void;
@@ -401,31 +401,48 @@ function TrackRow({
         e.dataTransfer.effectAllowed = "copy";
       }}
       onClick={onSelect}
-      onDoubleClick={() => {
+      onDoubleClick={(e) => {
+        // Double-clicking a control inside the row is not "add this track".
+        if (
+          e.target instanceof Element &&
+          e.target.closest("button, input, select, a")
+        ) {
+          return;
+        }
         if (mode === "arrange" && onAddToArrangement && track.present) {
           onAddToArrangement(track.id);
         }
       }}
     >
       <div className="trackBox1">
-        <div className="trackDur">{formatDuration(track.durationSeconds)}</div>
         <button
           type="button"
-          className="trackTitle"
+          className={playing ? "track-play track-play-active" : "track-play"}
           disabled={!track.present}
+          title={playing ? `Stop ${track.filename}` : `Play ${track.filename}`}
+          aria-label={
+            playing ? `Stop ${track.filename}` : `Play ${track.filename}`
+          }
+          aria-pressed={playing}
+          onClick={(e) => {
+            e.stopPropagation();
+            onTogglePlay();
+          }}
+        >
+          {playing ? "■" : "▶"}
+        </button>
+        <div className="trackDur">{formatDuration(track.durationSeconds)}</div>
+        <span
+          className="trackTitle"
           title={
             mode === "arrange" && draggable
               ? `${track.filename} — drag or double-click to add`
               : track.filename
           }
-          onClick={(e) => {
-            e.stopPropagation();
-            onPlay();
-          }}
         >
           {shortTitle(track.filename)}
           {!track.present && " (missing)"}
-        </button>
+        </span>
       </div>
       {showComments && (
         <div className="trackBox2">
@@ -542,7 +559,7 @@ export function TrackList({
   sort,
   canDragToArrange,
   loading,
-  onPlay,
+  onTogglePlay,
   onSelect,
   onTagClick,
   onToggleSort,
@@ -561,7 +578,7 @@ export function TrackList({
   sort: PoolSort;
   canDragToArrange: boolean;
   loading: boolean;
-  onPlay: (track: Track) => void;
+  onTogglePlay: (track: Track) => void;
   onSelect: (track: Track) => void;
   onTagClick: (tag: string) => void;
   onToggleSort: (key: SortKey) => void;
@@ -604,6 +621,7 @@ export function TrackList({
     <div className="trackList" style={colStyle}>
       <div className="col-header">
         <div className="trackBox1">
+          <span className="track-play-spacer" aria-hidden />
           <SortHeader
             className="trackDur"
             label="dur"
@@ -663,8 +681,8 @@ export function TrackList({
           showComments={showComments}
           tagFilter={tagFilter}
           draggable={canDragToArrange && track.present}
-          onPlay={() => {
-            if (track.present) onPlay(track);
+          onTogglePlay={() => {
+            if (track.present) onTogglePlay(track);
           }}
           onSelect={() => onSelect(track)}
           onTagClick={onTagClick}

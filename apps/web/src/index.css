@@ -389,6 +389,10 @@ body {
   background: var(--bg);
 }
 
+.studio-right[hidden] {
+  display: none;
+}
+
 /* ——— track list ——— */
 
 .trackList {
@@ -555,7 +559,6 @@ body {
   font-weight: 600;
   text-align: left;
   color: inherit;
-  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -568,12 +571,40 @@ body {
   min-width: 0;
 }
 
-.trackTitle:disabled {
-  cursor: not-allowed;
+.track-play,
+.track-play-spacer {
+  flex-shrink: 0;
+  width: 16px;
+  margin-right: 6px;
 }
 
-.trackTitle:hover:not(:disabled) {
+.track-play {
+  height: 16px;
+  margin-top: 2px;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 8px;
+  line-height: 14px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.track-play:hover:not(:disabled) {
   color: var(--accent);
+  border-color: var(--accent);
+}
+
+.track-play-active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.track-play:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .input_box1 {

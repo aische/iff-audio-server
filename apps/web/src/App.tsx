@@ -169,6 +169,11 @@ function StudioShell({
   const [sort, setSort] = useState(readSort);
   const [accountOpen, setAccountOpen] = useState(false);
   const [mode, setMode] = useState<AppMode>(readMode);
+  // Mounted on first visit, then kept (hidden in pool mode) so the open
+  // arrangement and its pending edits survive mode switches.
+  const [arrangeMounted, setArrangeMounted] = useState(
+    () => mode === "arrange",
+  );
   const [arrangeApi, setArrangeApi] = useState<ArrangeAddApi | null>(null);
   const [stopToken, setStopToken] = useState(0);
 
@@ -202,7 +207,9 @@ function StudioShell({
   function setModePersist(next: AppMode) {
     setMode(next);
     persistMode(next);
-    if (next === "pool") {
+    if (next === "arrange") {
+      setArrangeMounted(true);
+    } else {
       setStopToken((n) => n + 1);
     }
   }
@@ -238,10 +245,15 @@ function StudioShell({
     );
   }
 
-  function playTrack(track: Track) {
+  /** Play a track in the transport, or unload it if it is the current one. */
+  function togglePlayTrack(track: Track) {
+    setSelectedId(track.id);
+    if (playing?.id === track.id) {
+      setPlaying(null);
+      return;
+    }
     setStopToken((n) => n + 1);
     setPlaying(track);
-    setSelectedId(track.id);
   }
 
   function onArrangementPlayingChange(playingArr: boolean) {
@@ -398,7 +410,7 @@ function StudioShell({
                 mode === "arrange" && !!arrangeApi?.isOwner
               }
               loading={loading}
-              onPlay={playTrack}
+              onTogglePlay={togglePlayTrack}
               onSelect={(t) => setSelectedId(t.id)}
               onTagClick={setTagFilter}
               onToggleSort={toggleSort}
@@ -417,30 +429,31 @@ function StudioShell({
         </div>
 
         {mode === "arrange" && (
-          <>
-            <div
-              className="split-resize"
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize library panel"
-              aria-valuemin={SPLIT_W_MIN}
-              aria-valuemax={SPLIT_W_MAX}
-              aria-valuenow={splitCol.width}
-              title="Drag to resize · double-click to reset"
-              onPointerDown={splitCol.onResizePointerDown}
-              onDoubleClick={splitCol.reset}
+          <div
+            className="split-resize"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize library panel"
+            aria-valuemin={SPLIT_W_MIN}
+            aria-valuemax={SPLIT_W_MAX}
+            aria-valuenow={splitCol.width}
+            title="Drag to resize · double-click to reset"
+            onPointerDown={splitCol.onResizePointerDown}
+            onDoubleClick={splitCol.reset}
+          />
+        )}
+        {arrangeMounted && (
+          <div className="studio-right" hidden={mode !== "arrange"}>
+            <ArrangeShell
+              user={user}
+              tracks={tracks}
+              active={mode === "arrange"}
+              onError={onError}
+              onAddApiChange={setArrangeApi}
+              onArrangementPlayingChange={onArrangementPlayingChange}
+              stopToken={stopToken}
             />
-            <div className="studio-right">
-              <ArrangeShell
-                user={user}
-                tracks={tracks}
-                onError={onError}
-                onAddApiChange={setArrangeApi}
-                onArrangementPlayingChange={onArrangementPlayingChange}
-                stopToken={stopToken}
-              />
-            </div>
-          </>
+          </div>
         )}
       </div>
     </div>

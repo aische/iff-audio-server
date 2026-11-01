@@ -398,6 +398,7 @@ export type ArrangeAddApi = {
 export function ArrangeShell({
   user,
   tracks,
+  active,
   onError,
   onAddApiChange,
   onArrangementPlayingChange,
@@ -405,6 +406,8 @@ export function ArrangeShell({
 }: {
   user: User;
   tracks: Track[];
+  /** False while the panel is mounted but hidden (pool mode). */
+  active: boolean;
   onError: (message: string | null) => void;
   onAddApiChange: (api: ArrangeAddApi | null) => void;
   onArrangementPlayingChange: (playing: boolean) => void;
@@ -479,9 +482,11 @@ export function ArrangeShell({
   if (activeId) {
     return (
       <ArrangeEditor
+        key={activeId}
         arrangementId={activeId}
         user={user}
         tracks={tracks}
+        active={active}
         onBack={() => {
           setActiveId(null);
           void refresh();
@@ -626,10 +631,32 @@ function ArrangementListSection({
 // ArrangeEditor — single arrangement: sequence, trim, playback, autosave.
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether a keydown should drive arrangement shortcuts: focus must be on the
+ * page itself or inside the editor (not the library or transport), and not
+ * in a text field.
+ */
+function isShortcutTarget(
+  target: EventTarget | null,
+  panel: HTMLElement | null,
+) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (
+    target.isContentEditable ||
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  ) {
+    return false;
+  }
+  return target === document.body || (panel?.contains(target) ?? false);
+}
+
 function ArrangeEditor({
   arrangementId,
   user,
   tracks,
+  active,
   onBack,
   onOpen,
   onError,
@@ -640,6 +667,7 @@ function ArrangeEditor({
   arrangementId: string;
   user: User;
   tracks: Track[];
+  active: boolean;
   onBack: () => void;
   onOpen: (id: string) => void;
   onError: (message: string | null) => void;
@@ -672,6 +700,7 @@ function ArrangeEditor({
   const soloEndRef = useLatestRef(soloEndSec);
   const savedSnapshotRef = useRef("");
   const saveSeqRef = useRef(0);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const [playbackMode, setPlaybackMode] =
     useState<PlaybackMode>(readPlaybackMode);
@@ -803,6 +832,17 @@ function ArrangeEditor({
     }, AUTOSAVE_MS);
     return () => window.clearTimeout(t);
   }, [clips, name, isOwner]);
+
+  // Closing the editor (back to list, opening another arrangement, logout)
+  // cancels the debounce above; save whatever it was still holding.
+  const flushPendingSave = useEffectEvent(() => {
+    if (!isOwner) return;
+    if (arrangementSnapshot(name, clips) === savedSnapshotRef.current) return;
+    void persist(name, clips);
+  });
+  useEffect(() => {
+    return () => flushPendingSave();
+  }, []);
 
   function ensureAudioCtx() {
     if (!audioCtxRef.current) {
@@ -1129,13 +1169,16 @@ function ArrangeEditor({
   }, [stopToken]);
 
   const onKey = useEffectEvent((e: KeyboardEvent) => {
-    if (
-      e.target instanceof HTMLInputElement ||
-      e.target instanceof HTMLTextAreaElement
-    ) {
-      return;
-    }
+    if (!active || e.defaultPrevented) return;
+    if (!isShortcutTarget(e.target, panelRef.current)) return;
     if (e.key === " " || e.code === "Space") {
+      // A focused button already handles Space itself.
+      if (
+        e.target instanceof Element &&
+        e.target.closest("button, a[href], [role='button']")
+      ) {
+        return;
+      }
       e.preventDefault();
       if (playing) stopTransport();
       else {
@@ -1210,17 +1253,17 @@ function ArrangeEditor({
     );
   }
 
-  // Publish addTrack API to parent via ref callback.
-  const publishApi = useEffectEvent(() => {
+  // The parent keeps the published API in state; route through a ref so it
+  // always runs the latest addTrack (current trackById), not the one from
+  // the render that published it.
+  const addTrackRef = useLatestRef(addTrack);
+  useEffect(() => {
     onAddApiChange({
-      addTrack: (trackId, atIndex) => addTrack(trackId, atIndex),
+      addTrack: (trackId, atIndex) => addTrackRef.current(trackId, atIndex),
       isOwner,
     });
-  });
-  useEffect(() => {
-    publishApi();
     return () => onAddApiChange(null);
-  }, [isOwner, arrangementId, onAddApiChange]);
+  }, [isOwner, onAddApiChange, addTrackRef]);
 
   function updateClip(
     id: string,
@@ -1346,7 +1389,7 @@ function ArrangeEditor({
   }
 
   return (
-    <div className="arr-panel">
+    <div className="arr-panel" ref={panelRef}>
       <div className="arr-toolbar">
         <button type="button" className="filterButton" onClick={onBack}>
           ← arrangements
