@@ -15,6 +15,7 @@ export const TITLE_W_KEY = "iff-title-width";
 export const COMMENT_W_KEY = "iff-comment-width";
 export const SPLIT_W_KEY = "iff-split-width";
 export const MODE_KEY = "iff-app-mode";
+export const SHOW_INSPECTOR_KEY = "iff-show-inspector";
 
 // --- Column width defaults & bounds ---
 
@@ -148,6 +149,14 @@ export function readSort(): PoolSort {
   }
 }
 
+export function readShowInspector(): boolean {
+  try {
+    return localStorage.getItem(SHOW_INSPECTOR_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
 export function readMode(): AppMode {
   try {
     const raw = localStorage.getItem(MODE_KEY);
@@ -171,6 +180,10 @@ export function persistShowOthers(value: boolean) {
 
 export function persistHideReleased(value: boolean) {
   persistBool(HIDE_RELEASED_KEY, value, "1", "0");
+}
+
+export function persistShowInspector(value: boolean) {
+  persistBool(SHOW_INSPECTOR_KEY, value, "1", "0");
 }
 
 export function persistSort(sort: PoolSort) {

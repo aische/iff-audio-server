@@ -437,6 +437,30 @@ body {
   flex-direction: column;
   gap: 4px;
   flex-shrink: 0;
+  padding-right: 18px;
+}
+
+/* The one interactive bit of the card. */
+.inspector-hide {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.inspector-hide:hover {
+  color: var(--text);
+  border-color: var(--line);
 }
 
 .inspector-title {
@@ -560,9 +584,12 @@ body {
 
 /* ——— track list ——— */
 
-/* Bottom room so the last rows can scroll clear of the inspector card. */
 .trackList {
   background: var(--bg);
+}
+
+/* Bottom room so the last rows can scroll clear of the inspector card. */
+.app.studio.inspector-on .trackList {
   padding-bottom: calc(var(--inspector-max-h) + 2 * var(--inspector-gap));
 }
 
@@ -1727,7 +1754,8 @@ body {
     display: none;
   }
 
-  .trackList {
+  .trackList,
+  .app.studio.inspector-on .trackList {
     padding-bottom: 1.5rem;
   }
 }
