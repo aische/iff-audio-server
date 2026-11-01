@@ -343,6 +343,7 @@ function StudioShell({
       0,
     ),
     hiddenCount: checkedTracks.filter((t) => !visibleIds.has(t.id)).length,
+    releasedCount: checkedTracks.filter((t) => t.releasedOn).length,
     onClear: () => setCheckedIds(new Set()),
     onCreateArrangement: createArrangementFromChecked,
   };

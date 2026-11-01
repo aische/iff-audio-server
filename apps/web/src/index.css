@@ -250,7 +250,8 @@ body {
   margin-right: 2px;
 }
 
-.checked-hidden {
+.checked-hidden,
+.checked-released {
   color: var(--danger);
 }
 
@@ -1385,6 +1386,33 @@ body {
 
 .arr-row-skipped .arr-row-name {
   text-decoration: line-through;
+}
+
+.arr-row-released {
+  border-left: 3px solid var(--danger);
+}
+
+.arr-row-released-badge {
+  flex-shrink: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 5px;
+  border: 1px solid var(--danger);
+  background: rgb(196 92 74 / 15%);
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.arr-released-warn {
+  padding: 0 6px;
+  border: 1px solid var(--danger);
+  background: rgb(196 92 74 / 15%);
+  color: var(--danger);
+  font-size: 12px;
+  cursor: help;
 }
 
 .arr-row-name {
