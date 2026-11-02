@@ -110,7 +110,7 @@ const loginLimitByEmail = limitBy(10, "15 minutes", (request) => {
 const changePasswordLimit = limitBy(
   10,
   "15 minutes",
-  (request) => `user:${request.session.userId ?? request.ip}`,
+  (request) => `user:${request.userId}`,
 );
 
 // Only for reply.sendFile (Range/ETag/Content-Length); routes stay behind auth.
@@ -129,11 +129,27 @@ declare module "fastify" {
   interface Session {
     userId?: string;
   }
+  interface FastifyContextConfig {
+    /** Reachable without a session. Every other route requires login. */
+    public?: boolean;
+  }
+  interface FastifyRequest {
+    /** Logged-in user's id; set by the auth hook on every non-public route. */
+    userId: string;
+  }
 }
 
-function requireUser(request: { session: { userId?: string } }) {
-  return request.session.userId ?? null;
-}
+// Auth is deny-by-default: routes opt out with `config: { public: true }`.
+// Runs after the session plugin's onRequest hook, before body parsing.
+app.decorateRequest("userId", "");
+app.addHook("onRequest", async (request, reply) => {
+  // CORS preflights carry no cookies; @fastify/cors answers them.
+  if (request.method === "OPTIONS") return;
+  if (request.routeOptions.config.public) return;
+  const userId = request.session.userId;
+  if (!userId) return reply.code(401).send({ error: "unauthorized" });
+  request.userId = userId;
+});
 
 // Validation errors → 400 with the ajv message; 5xx details stay in the log.
 app.setErrorHandler<FastifyError>((error, request, reply) => {
@@ -165,7 +181,7 @@ function bodyOf(properties: Record<string, object>) {
 const passwordField = { type: "string", maxLength: 1024 };
 const arrangementName = { type: "string", maxLength: 200 };
 
-app.get("/health", async () => ({ ok: true }));
+app.get("/health", { config: { public: true } }, async () => ({ ok: true }));
 
 app.post<{
   Body: { email?: string; password?: string };
@@ -178,6 +194,7 @@ app.post<{
         password: passwordField,
       }),
     },
+    config: { public: true },
     preHandler: [loginLimitByIp, loginLimitByEmail],
   },
   async (request, reply) => {
@@ -204,14 +221,13 @@ app.post<{
   },
 );
 
-app.post("/auth/logout", async (request, reply) => {
+app.post("/auth/logout", { config: { public: true } }, async (request, reply) => {
   await request.session.destroy();
   return reply.code(204).send();
 });
 
 app.get("/auth/me", async (request, reply) => {
-  const userId = requireUser(request);
-  if (!userId) return reply.code(401).send({ error: "unauthorized" });
+  const { userId } = request;
 
   const [user] = await db
     .select()
@@ -237,8 +253,7 @@ app.post<{
     preHandler: changePasswordLimit,
   },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
+    const { userId } = request;
 
     const { currentPassword, newPassword } = request.body ?? {};
     if (!currentPassword || !newPassword) {
@@ -268,9 +283,6 @@ app.post<{
 );
 
 app.get("/tracks", async (request, reply) => {
-  const userId = requireUser(request);
-  if (!userId) return reply.code(401).send({ error: "unauthorized" });
-
   const rows = await db
     .select({
       id: tracks.id,
@@ -361,9 +373,6 @@ app.patch<{
     },
   },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
-
     const raw = request.body?.releasedOn;
     if (raw !== null && typeof raw !== "string") {
       return reply.code(400).send({ error: "releasedOn required" });
@@ -389,9 +398,6 @@ app.get<{ Params: { id: string } }>(
   "/tracks/:id/peaks",
   { schema: { params: idParams } },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
-
     const [track] = await db
       .select({
         peaks: tracks.peaks,
@@ -414,9 +420,6 @@ app.get<{ Params: { id: string } }>(
   "/tracks/:id/download",
   { schema: { params: idParams } },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
-
     const [track] = await db
       .select()
       .from(tracks)
@@ -449,9 +452,6 @@ app.get<{ Params: { id: string } }>(
   "/tracks/:id/comments",
   { schema: { params: idParams } },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
-
     const [track] = await db
       .select({ id: tracks.id })
       .from(tracks)
@@ -490,8 +490,7 @@ app.put<{
     },
   },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
+    const { userId } = request;
 
     if (typeof request.body?.body !== "string") {
       return reply.code(400).send({ error: "body required" });
@@ -583,9 +582,6 @@ async function findTagByName(name: string, excludeId?: string) {
 }
 
 app.get("/tags", async (request, reply) => {
-  const userId = requireUser(request);
-  if (!userId) return reply.code(401).send({ error: "unauthorized" });
-
   return db.select(tagColumns).from(tags).orderBy(asc(tags.name));
 });
 
@@ -596,8 +592,7 @@ app.post<{ Params: { id: string }; Body: { name?: string } }>(
     schema: { params: idParams, body: bodyOf({ name: tagNameField }) },
   },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
+    const { userId } = request;
 
     const name = normalizeTagName(request.body?.name ?? "");
     if (!name) {
@@ -658,9 +653,6 @@ app.delete<{ Params: { id: string; tagId: string } }>(
     },
   },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
-
     await db
       .delete(trackTags)
       .where(
@@ -689,9 +681,6 @@ app.patch<{
     },
   },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
-
     const body = request.body ?? {};
     const [tag] = await db
       .select(tagColumns)
@@ -759,9 +748,6 @@ app.delete<{ Params: { id: string } }>(
   "/tags/:id",
   { schema: { params: idParams } },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
-
     const deleted = await db
       .delete(tags)
       .where(eq(tags.id, request.params.id))
@@ -970,9 +956,6 @@ async function uniqueCopyName(userId: string, base: string) {
 }
 
 app.get("/arrangements", async (request, reply) => {
-  const userId = requireUser(request);
-  if (!userId) return reply.code(401).send({ error: "unauthorized" });
-
   const rows = await db
     .select({
       id: arrangements.id,
@@ -1009,8 +992,7 @@ app.post<{ Body: { name?: string; clips?: unknown } }>(
     },
   },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
+    const { userId } = request;
 
     const name = request.body?.name?.trim();
     if (!name) return reply.code(400).send({ error: "name required" });
@@ -1045,9 +1027,6 @@ app.get<{ Params: { id: string } }>(
   "/arrangements/:id",
   { schema: { params: idParams } },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
-
     const row = await arrangementWithOwner(request.params.id);
     if (!row) return reply.code(404).send({ error: "not found" });
 
@@ -1059,8 +1038,7 @@ app.post<{ Params: { id: string } }>(
   "/arrangements/:id/copy",
   { schema: { params: idParams } },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
+    const { userId } = request;
 
     const source = await arrangementWithOwner(request.params.id);
     if (!source) return reply.code(404).send({ error: "not found" });
@@ -1098,8 +1076,7 @@ app.put<{
     },
   },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
+    const { userId } = request;
 
     const [row] = await db
       .select()
@@ -1158,8 +1135,7 @@ app.delete<{ Params: { id: string } }>(
   "/arrangements/:id",
   { schema: { params: idParams } },
   async (request, reply) => {
-    const userId = requireUser(request);
-    if (!userId) return reply.code(401).send({ error: "unauthorized" });
+    const { userId } = request;
 
     const deleted = await db
       .delete(arrangements)
