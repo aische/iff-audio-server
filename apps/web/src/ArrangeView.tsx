@@ -70,6 +70,8 @@ type VoiceSlot = {
   voice: ClipVoice;
   state: "idle" | "loading" | "ready" | "started" | "failed";
   gen: number;
+  /** Source time the last start plays up to. */
+  endSrc: number;
 };
 
 /** Restart a voice only after an explicit seek (not rAF vs audio clock drift). */
@@ -78,6 +80,10 @@ const SEEK_JUMP_SEC = 0.3;
 const LOOKAHEAD_SEC = 0.2;
 /** Show "loading…" only when audio is held up longer than this. */
 const WAITING_HINT_MS = 200;
+/** Clip play resumes from the playhead unless it is this close to the out point. */
+const RESUME_TAIL_SEC = 0.25;
+/** A press on the trim selection that moves less than this is a click (seek). */
+const CLICK_SLOP_PX = 4;
 const PLAYBACK_MODE_KEY = "iff-arrange-playback";
 const INSPECTOR_OPEN_KEY = "iff-arrange-inspector-open";
 const INSPECTOR_VIEW_KEY = "iff-arrange-inspector-view";
@@ -951,6 +957,7 @@ function ArrangeEditor({
       voice: ensureEngine().createVoice(clip.trackId),
       state: "idle",
       gen: 0,
+      endSrc: 0,
     };
     slotsRef.current.set(clip.instanceId, slot);
     return slot;
@@ -985,6 +992,7 @@ function ArrangeEditor({
   ) {
     const gen = ++slot.gen;
     slot.state = "started";
+    slot.endSrc = offsetSec + durSec;
     slot.voice.setGain(clip.gain);
     slot.voice.start(offsetSec, durSec, delaySec).catch((err: unknown) => {
       if (!isSlotCurrent(slot, gen)) return;
@@ -1052,6 +1060,14 @@ function ArrangeEditor({
         startSlot(slot, cur.clip, offset, cur.arrEnd - at, 0);
       } else if (slot.state === "started") {
         slot.voice.setGain(cur.clip.gain);
+        // The out point moved later after this voice started: restart it
+        // just before it would stop, rather than on every trim drag event.
+        if (
+          cur.clip.outSec > slot.endSrc + 0.001 &&
+          slot.endSrc - offset < LOOKAHEAD_SEC
+        ) {
+          startSlot(slot, cur.clip, offset, cur.arrEnd - at, 0);
+        }
       }
     }
 
@@ -1134,6 +1150,82 @@ function ArrangeEditor({
       slotsRef.current.get(clip.instanceId)?.voice.setGain(clip.gain);
     }
   }, [clips]);
+
+  /**
+   * When clips change (trim, pause, reorder, edits to earlier clips), keep
+   * the playhead on the same spot of the same clip: inside its audio at the
+   * same source time, or at the new in / out point if that was trimmed past.
+   * Audio keeps running unless the spot under the playhead changed.
+   */
+  const retimeHead = useEffectEvent(
+    (oldSegs: ScheduleSeg[], newSegs: ScheduleSeg[]) => {
+      let stopped = false;
+      if (soloClipId != null) {
+        const soloSeg = newSegs.find(
+          (s) => s.kind === "audio" && s.clip.instanceId === soloClipId,
+        );
+        if (soloSeg) {
+          soloEndRef.current = soloSeg.arrEnd;
+          setSoloEndSec(soloSeg.arrEnd);
+        } else {
+          stopTransport();
+          stopped = true;
+        }
+      }
+
+      const at = playhead.get();
+      const old = segAt(oldSegs, at);
+      if (!old) return;
+      const id = old.clip.instanceId;
+      const audio = newSegs.find(
+        (s) => s.kind === "audio" && s.clip.instanceId === id,
+      );
+      if (!audio) return;
+
+      let target: number;
+      let continuous = true;
+      if (old.kind === "audio") {
+        const src = old.clip.inSec + (at - old.arrStart);
+        if (src < audio.clip.inSec) {
+          target = audio.arrStart;
+          continuous = false;
+        } else if (src >= audio.clip.outSec) {
+          target = audio.arrEnd;
+          continuous = false;
+        } else {
+          target = audio.arrStart + (src - audio.clip.inSec);
+        }
+      } else {
+        const pause = newSegs.find(
+          (s) => s.kind === "pause" && s.clip.instanceId === id,
+        );
+        const oldLen = old.arrEnd - old.arrStart;
+        target = pause
+          ? Math.min(pause.arrEnd, pause.arrStart + (at - old.arrStart))
+          : audio.arrEnd;
+        // The next clip may already be scheduled against the old pause.
+        continuous =
+          pause != null &&
+          Math.abs(pause.arrEnd - pause.arrStart - oldLen) < 0.001;
+      }
+
+      setPlayheadSec(target);
+      if (!playRef.current || stopped) return;
+      if (continuous) {
+        // Same audio position, new timeline: not a seek.
+        lastSyncAtRef.current = target;
+      } else {
+        syncAudio(target, true);
+      }
+    },
+  );
+  const prevScheduleRef = useRef({ clips, segs });
+  useLayoutEffect(() => {
+    const prev = prevScheduleRef.current;
+    prevScheduleRef.current = { clips, segs };
+    // Skip toggles change `segs` only and retime the playhead themselves.
+    if (prev.clips !== clips) retimeHead(prev.segs, segs);
+  }, [clips, segs]);
 
   const peakTrackKey = useMemo(
     () => [...new Set(clips.map((c) => c.trackId))].sort().join(","),
@@ -1264,6 +1356,10 @@ function ArrangeEditor({
   const selected = selectedId
     ? (clips.find((c) => c.instanceId === selectedId) ?? null)
     : null;
+  /** Where the selected clip plays in the arrangement; none while skipped. */
+  const selectedSeg = selectedId
+    ? segs.find((s) => s.kind === "audio" && s.clip.instanceId === selectedId)
+    : undefined;
 
   // Keep the selected row, and while playing the row under the playhead, in view.
   useEffect(() => {
@@ -1501,26 +1597,57 @@ function ArrangeEditor({
     setPlaying(true);
   }
 
-  /** Audition one clip from selection start (inSec) through outSec, then stop. */
-  function playClipSelection(clip: ArrangementClip) {
-    const seg = segsRef.current.find(
-      (s) => s.kind === "audio" && s.clip.instanceId === clip.instanceId,
+  function clipAudioSeg(instanceId: string) {
+    return segsRef.current.find(
+      (s) => s.kind === "audio" && s.clip.instanceId === instanceId,
     );
+  }
+
+  /**
+   * Audition one clip through outSec, then stop. Starts at the playhead when
+   * it is inside the clip, otherwise (or with `fromStart`) at the in point.
+   * Toggles off while that clip is already auditioning, unless `fromStart`
+   * (which restarts it).
+   */
+  function playClipSelection(clip: ArrangementClip, fromStart = false) {
+    const seg = clipAudioSeg(clip.instanceId);
     if (!seg) return;
-    if (playing && soloClipId === clip.instanceId) {
+    if (!fromStart && playing && soloClipId === clip.instanceId) {
       stopTransport();
       return;
     }
+    const head = playhead.get();
+    const from =
+      !fromStart && head >= seg.arrStart && head < seg.arrEnd - RESUME_TAIL_SEC
+        ? head
+        : seg.arrStart;
     stopAllVoices();
     soloEndRef.current = seg.arrEnd;
     setSoloEndSec(seg.arrEnd);
     setSoloClipId(clip.instanceId);
-    setPlayheadSec(seg.arrStart);
+    setPlayheadSec(from);
     if (!playing) {
       setPlaying(true);
     } else {
-      syncAudio(seg.arrStart, true);
+      syncAudio(from, true);
     }
+  }
+
+  /** Move the playhead to source time `srcSec` of a clip (trim view click). */
+  function seekInClip(instanceId: string, srcSec: number) {
+    const seg = clipAudioSeg(instanceId);
+    if (!seg) return;
+    const into = Math.max(
+      0,
+      Math.min(srcSec - seg.clip.inSec, seg.arrEnd - seg.arrStart),
+    );
+    // Auditioning another clip: audition this one from here instead.
+    if (playing && soloClipId != null && soloClipId !== instanceId) {
+      soloEndRef.current = seg.arrEnd;
+      setSoloEndSec(seg.arrEnd);
+      setSoloClipId(instanceId);
+    }
+    seekToArrangement(seg.arrStart + into);
   }
 
   const skippedCount = clips.filter((c) => skippedIds.has(c.instanceId)).length;
@@ -2037,8 +2164,24 @@ function ArrangeEditor({
           soloing={
             selected != null && playing && soloClipId === selected.instanceId
           }
+          head={
+            selectedSeg
+              ? {
+                  store: playhead,
+                  arrStart: selectedSeg.arrStart,
+                  arrEnd: selectedSeg.arrEnd,
+                  follow: playing,
+                }
+              : null
+          }
+          onSeek={(srcSec) => {
+            if (selected) seekInClip(selected.instanceId, srcSec);
+          }}
           onPlay={() => {
             if (selected) playClipSelection(selected);
+          }}
+          onPlayFromStart={() => {
+            if (selected) playClipSelection(selected, true);
           }}
           onToggleSkip={() => {
             if (selected) toggleSkip(selected.instanceId);
@@ -2361,6 +2504,16 @@ type ClipPatch = Partial<
   Pick<ArrangementClip, "inSec" | "outSec" | "pauseSec" | "gain">
 >;
 
+/** The arrangement playhead as the trim view needs it (selected clip only). */
+type TrimHead = {
+  store: PlayheadStore;
+  /** The selected clip's audio in arrangement time. */
+  arrStart: number;
+  arrEnd: number;
+  /** Keep the playhead in view (while playing). */
+  follow: boolean;
+};
+
 /** Inspector height in the comments view before the wave view was measured. */
 const DEFAULT_INSPECTOR_H = 176;
 
@@ -2388,7 +2541,10 @@ function ClipInspector({
   onOpenChange,
   skipped,
   soloing,
+  head,
+  onSeek,
   onPlay,
+  onPlayFromStart,
   onToggleSkip,
   onRemove,
   onChange,
@@ -2404,7 +2560,12 @@ function ClipInspector({
   onOpenChange: (open: boolean) => void;
   skipped: boolean;
   soloing: boolean;
+  head: TrimHead | null;
+  /** Move the playhead to this source time of the clip. */
+  onSeek: (srcSec: number) => void;
   onPlay: () => void;
+  /** Audition from the in point, restarting if already auditioning. */
+  onPlayFromStart: () => void;
   onToggleSkip: () => void;
   onRemove: () => void;
   onChange: (patch: ClipPatch) => void;
@@ -2511,13 +2672,27 @@ function ClipInspector({
             <button
               type="button"
               disabled={skipped}
+              className="arr-row-btn"
+              title={
+                skipped
+                  ? "Skipped clips don't play"
+                  : "Play this clip from the in point"
+              }
+              aria-label="Play clip from the in point"
+              onClick={onPlayFromStart}
+            >
+              ⏮
+            </button>
+            <button
+              type="button"
+              disabled={skipped}
               className={soloing ? "arr-row-btn arr-row-btn-on" : "arr-row-btn"}
               title={
                 skipped
                   ? "Skipped clips don't play"
                   : soloing
                     ? "Stop"
-                    : "Play this clip"
+                    : "Play this clip (from the playhead when it is inside)"
               }
               aria-label={soloing ? "Stop clip" : "Play clip"}
               onClick={onPlay}
@@ -2687,6 +2862,8 @@ function ClipInspector({
               peaksVersion={peaksVersion}
               srcDur={scale.srcDur}
               pxPerSec={scale.effectivePx}
+              head={head}
+              onSeek={onSeek}
               onChange={onChange}
             />
           ) : (
@@ -2706,6 +2883,8 @@ function TrimEditor({
   peaksVersion,
   srcDur,
   pxPerSec,
+  head,
+  onSeek,
   onChange,
 }: {
   clip: ArrangementClip;
@@ -2713,8 +2892,11 @@ function TrimEditor({
   peaksVersion: number;
   srcDur: number;
   pxPerSec: number;
+  head: TrimHead | null;
+  onSeek: (srcSec: number) => void;
   onChange: (patch: ClipPatch) => void;
 }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const clipRef = useLatestRef(clip);
   const dragRef = useRef<{
@@ -2736,12 +2918,17 @@ function TrimEditor({
     return clientX - rect.left - canvas.clientLeft;
   }
 
+  /**
+   * Handles drag the in / out point. A press on the selection seeks there
+   * on release, unless it moves past CLICK_SLOP_PX: then (for the owner)
+   * it drags the whole selection.
+   */
   function onPointerDown(
     e: ReactPointerEvent,
     kind: "in" | "out" | "range",
   ) {
-    if (!isOwner) return;
     if (e.button !== 0) return;
+    if (!isOwner && kind !== "range") return;
     e.preventDefault();
     e.stopPropagation();
     const current = clipRef.current;
@@ -2750,8 +2937,10 @@ function TrimEditor({
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
 
+    const startClientX = e.clientX;
     const x = pointerCanvasX(e.clientX);
     const at = x / pxPerSec;
+    let dragging = kind !== "range";
 
     if (kind === "range") {
       dragRef.current = {
@@ -2766,6 +2955,11 @@ function TrimEditor({
     }
 
     const onMove = (ev: PointerEvent) => {
+      if (!dragging) {
+        if (!isOwner) return;
+        if (Math.abs(ev.clientX - startClientX) < CLICK_SLOP_PX) return;
+        dragging = true;
+      }
       const d = dragRef.current;
       const c = clipRef.current;
       if (!d || !c) return;
@@ -2794,6 +2988,7 @@ function TrimEditor({
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
       el.removeEventListener("pointercancel", onUp);
+      if (!dragging && ev.type === "pointerup") onSeek(at);
     };
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerup", onUp);
@@ -2802,7 +2997,7 @@ function TrimEditor({
 
   return (
     <div className="arr-trim">
-      <div className="arr-trim-scroll">
+      <div className="arr-trim-scroll" ref={scrollRef}>
         <div
           className="arr-trim-canvas"
           ref={canvasRef}
@@ -2824,6 +3019,11 @@ function TrimEditor({
                 : "arr-trim-selection arr-trim-selection-ro"
             }
             style={{ left: inX, width: selW, height: EDITOR_WAVE_H }}
+            title={
+              isOwner
+                ? "Click to move the playhead here · drag to move the selection"
+                : "Click to move the playhead here"
+            }
             onPointerDown={(e) => onPointerDown(e, "range")}
           >
             {isOwner && (
@@ -2839,10 +3039,53 @@ function TrimEditor({
               </>
             )}
           </div>
+          {head && (
+            <TrimPlayhead
+              head={head}
+              inSec={clip.inSec}
+              pxPerSec={pxPerSec}
+              scrollRef={scrollRef}
+            />
+          )}
         </div>
       </div>
     </div>
   );
+}
+
+/** The arrangement playhead, drawn while it is inside the selected clip. */
+function TrimPlayhead({
+  head,
+  inSec,
+  pxPerSec,
+  scrollRef,
+}: {
+  head: TrimHead;
+  inSec: number;
+  pxPerSec: number;
+  scrollRef: RefObject<HTMLDivElement | null>;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const { store, arrStart, arrEnd, follow } = head;
+  const x = usePlayhead(store, (sec) =>
+    sec >= arrStart && sec <= arrEnd
+      ? Math.round((inSec + (sec - arrStart)) * pxPerSec)
+      : null,
+  );
+
+  useEffect(() => {
+    const sc = scrollRef.current;
+    const el = ref.current;
+    if (!follow || !sc || !el) return;
+    const sr = sc.getBoundingClientRect();
+    const left = el.getBoundingClientRect().left - sr.left;
+    if (left < 0 || left > sc.clientWidth - 16) {
+      sc.scrollLeft += left - sc.clientWidth * 0.2;
+    }
+  }, [x, follow, scrollRef]);
+
+  if (x == null) return null;
+  return <div ref={ref} className="arr-trim-playhead" style={{ left: x }} />;
 }
 
 /** Read-only comments for the selected track; editing stays in the library. */
