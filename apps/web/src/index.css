@@ -1673,6 +1673,32 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Session-only skip toggle: always visible so skipped state reads at a glance. */
+.arr-row-skip {
+  flex-shrink: 0;
+  font: inherit;
+  font-size: 11px;
+  height: 20px;
+  padding: 0 6px;
+  color: var(--text-faint);
+  background: transparent;
+  border: 1px dashed var(--line);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.arr-row-skip:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+.arr-row-skip-on {
+  color: var(--accent);
+  border-style: solid;
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
 /* Play / ⋯ only show on hover, focus, selection, or an open menu. */
 .arr-row-actions {
   display: inline-flex;
@@ -1796,8 +1822,7 @@ body {
   font-size: 11px;
 }
 
-.arr-menu-item[role="menuitemradio"] .arr-menu-hint,
-.arr-menu-item[role="menuitemcheckbox"] .arr-menu-hint {
+.arr-menu-item[role="menuitemradio"] .arr-menu-hint {
   padding-left: calc(1em + 6px);
 }
 
@@ -1844,7 +1869,6 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  max-height: 38vh;
   border-top: 1px solid var(--line);
   background: var(--bg-chrome);
 }
@@ -1888,41 +1912,21 @@ body {
   max-width: 280px;
 }
 
-.arr-tabs {
-  display: inline-flex;
-  margin-left: auto;
-}
-
-.arr-tab {
-  font: inherit;
-  font-size: 12px;
-  padding: 3px 10px;
-  color: var(--text-dim);
-  background: transparent;
-  border: 1px solid var(--line);
-  cursor: pointer;
-}
-
-.arr-tab + .arr-tab {
-  border-left: none;
-}
-
-.arr-tab:hover {
-  color: var(--text);
-  background: var(--bg-raised);
-}
-
-.arr-tab-on {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-color: var(--accent-line);
-}
-
 .arr-inspector-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Bar segments: in/out · pause/gain · skip/released · zoom */
+.arr-insp-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
 }
 
 .arr-inspector-empty {
@@ -1960,22 +1964,16 @@ body {
 
 /* Trim tab */
 .arr-trim {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
-.arr-trim-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px 0;
-}
-
 .arr-trim-scroll {
   overflow: auto;
-  padding: 6px 10px 10px;
+  padding: 8px 10px 10px;
   overscroll-behavior: contain;
 }
 
@@ -2051,33 +2049,13 @@ body {
   background: #f0c040;
 }
 
-/* Clip tab */
-.arr-clip-form {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  align-items: center;
-  gap: 8px 14px;
-  padding: 10px;
-}
-
-.arr-field-label {
-  color: var(--text-faint);
-  font-size: 11px;
-  text-transform: lowercase;
-}
-
 .arr-skip-field {
-  flex-wrap: wrap;
   color: var(--text);
   cursor: pointer;
 }
 
 .arr-skip-field .track-check {
   margin-right: 2px;
-}
-
-.arr-released-text {
-  color: var(--danger);
 }
 
 .arr-danger-btn {
@@ -2090,11 +2068,26 @@ body {
   border-color: var(--danger);
 }
 
-/* Comments tab */
+/* Comments: shown instead of the waveform via the wave / comments toggle. */
+.arr-comments {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.arr-view-toggle {
+  display: inline-flex;
+}
+
+.arr-view-toggle .filterButton + .filterButton {
+  border-left: none;
+}
+
 .arr-comments-list {
   list-style: none;
   margin: 0;
-  padding: 8px 10px 4px;
+  padding: 6px 10px 4px;
   display: flex;
   flex-direction: column;
   gap: 6px;

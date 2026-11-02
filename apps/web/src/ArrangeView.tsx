@@ -79,8 +79,11 @@ const LOOKAHEAD_SEC = 0.2;
 /** Show "loading…" only when audio is held up longer than this. */
 const WAITING_HINT_MS = 200;
 const PLAYBACK_MODE_KEY = "iff-arrange-playback";
-const INSPECTOR_TAB_KEY = "iff-arrange-inspector-tab";
 const INSPECTOR_OPEN_KEY = "iff-arrange-inspector-open";
+const INSPECTOR_VIEW_KEY = "iff-arrange-inspector-view";
+
+/** What the inspector shows below its bar. */
+type InspectorView = "wave" | "comments";
 /** Overview zoom: 1 = whole arrangement fits the strip. */
 const OVERVIEW_ZOOM_MAX = 32;
 
@@ -95,13 +98,6 @@ const PLAYBACK_MODE_LABEL: Record<PlaybackMode, { name: string; hint: string }> 
       hint: "Decodes current and next clip; waits to load",
     },
   };
-
-type InspectorTab = "trim" | "clip" | "comments";
-const INSPECTOR_TABS: { id: InspectorTab; label: string }[] = [
-  { id: "trim", label: "Trim" },
-  { id: "clip", label: "Clip" },
-  { id: "comments", label: "Comments" },
-];
 
 function readStored(key: string): string | null {
   try {
@@ -119,9 +115,8 @@ function writeStored(key: string, value: string) {
   }
 }
 
-function readInspectorTab(): InspectorTab {
-  const raw = readStored(INSPECTOR_TAB_KEY);
-  return raw === "clip" || raw === "comments" ? raw : "trim";
+function readInspectorView(): InspectorView {
+  return readStored(INSPECTOR_VIEW_KEY) === "comments" ? "comments" : "wave";
 }
 
 function readInspectorOpen(): boolean {
@@ -718,8 +713,6 @@ function ArrangeEditor({
   const [name, setName] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [overviewZoom, setOverviewZoom] = useState(1);
-  const [inspectorTab, setInspectorTab] =
-    useState<InspectorTab>(readInspectorTab);
   const [inspectorOpen, setInspectorOpen] = useState(readInspectorOpen);
   const [editorPxPerSec, setEditorPxPerSec] = useState(EDITOR_PX_DEFAULT);
   const [playing, setPlaying] = useState(false);
@@ -1285,12 +1278,6 @@ function ArrangeEditor({
   function removeClip(id: string) {
     setClips((prev) => prev.filter((c) => c.instanceId !== id));
     setSelectedId((cur) => (cur === id ? null : cur));
-  }
-
-  function changeInspectorTab(tab: InspectorTab) {
-    setInspectorTab(tab);
-    writeStored(INSPECTOR_TAB_KEY, tab);
-    changeInspectorOpen(true);
   }
 
   function changeInspectorOpen(open: boolean) {
@@ -1955,6 +1942,26 @@ function ArrangeEditor({
                         />
                       </span>
                       <span className="arr-row-dur">{formatClock(dur)}</span>
+                      <button
+                        type="button"
+                        className={
+                          isSkipped
+                            ? "arr-row-skip arr-row-skip-on"
+                            : "arr-row-skip"
+                        }
+                        aria-pressed={isSkipped}
+                        title={
+                          isSkipped
+                            ? "Skipped: left out of playback (this session only, not saved). Click to play it again."
+                            : "Skip in playback (this session only, not saved)"
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleSkip(clip.instanceId);
+                        }}
+                      >
+                        skip
+                      </button>
                       <span className="arr-row-actions">
                         <button
                           type="button"
@@ -1979,47 +1986,27 @@ function ArrangeEditor({
                         >
                           {soloing ? "■" : "▶"}
                         </button>
-                        <Menu
-                          label="⋯"
-                          title="Clip actions"
-                          buttonClassName="arr-row-btn"
-                        >
-                          {(close) => (
-                            <>
+                        {isOwner && (
+                          <Menu
+                            label="⋯"
+                            title="Clip actions"
+                            buttonClassName="arr-row-btn"
+                          >
+                            {(close) => (
                               <button
                                 type="button"
-                                role="menuitemcheckbox"
-                                aria-checked={isSkipped}
-                                className="arr-menu-item"
+                                role="menuitem"
+                                className="arr-menu-item arr-menu-danger"
                                 onClick={() => {
                                   close();
-                                  toggleSkip(clip.instanceId);
+                                  removeClip(clip.instanceId);
                                 }}
                               >
-                                <span className="arr-menu-check" aria-hidden>
-                                  {isSkipped ? "✓" : ""}
-                                </span>
-                                Skip in playback
-                                <span className="arr-menu-hint">
-                                  this session only, not saved
-                                </span>
+                                Remove from arrangement
                               </button>
-                              {isOwner && (
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  className="arr-menu-item arr-menu-danger"
-                                  onClick={() => {
-                                    close();
-                                    removeClip(clip.instanceId);
-                                  }}
-                                >
-                                  Remove from arrangement
-                                </button>
-                              )}
-                            </>
-                          )}
-                        </Menu>
+                            )}
+                          </Menu>
+                        )}
                       </span>
                     </div>
                   </div>
@@ -2046,8 +2033,6 @@ function ArrangeEditor({
           isOwner={isOwner}
           open={inspectorOpen}
           onOpenChange={changeInspectorOpen}
-          tab={inspectorTab}
-          onTabChange={changeInspectorTab}
           skipped={selected ? skippedIds.has(selected.instanceId) : false}
           soloing={
             selected != null && playing && soloClipId === selected.instanceId
@@ -2368,12 +2353,31 @@ function OverviewPlayhead({
 }
 
 // ---------------------------------------------------------------------------
-// ClipInspector — the selected clip: Trim / Clip / Comments tabs.
+// ClipInspector — the selected clip: every control in one toolbar, with the
+// trim waveform or the track's comments below (wave / comments toggle).
 // ---------------------------------------------------------------------------
 
 type ClipPatch = Partial<
   Pick<ArrangementClip, "inSec" | "outSec" | "pauseSec" | "gain">
 >;
+
+/** Inspector height in the comments view before the wave view was measured. */
+const DEFAULT_INSPECTOR_H = 176;
+
+/** Waveform scale for the trim editor, capped so huge tracks stay drawable. */
+function trimScale(
+  clip: ArrangementClip,
+  track: Track,
+  editorPxPerSec: number,
+) {
+  const srcDur = sourceDuration(track, getCachedPeaks(clip.trackId) ?? null);
+  const maxPx = Math.min(
+    PX_PER_SEC_MAX,
+    MAX_EDITOR_CSS_PX / Math.max(srcDur, MIN_CLIP_SEC),
+  );
+  const effectivePx = Math.min(editorPxPerSec, Math.max(PX_PER_SEC_MIN, maxPx));
+  return { srcDur, maxPx, effectivePx };
+}
 
 function ClipInspector({
   clip,
@@ -2382,8 +2386,6 @@ function ClipInspector({
   isOwner,
   open,
   onOpenChange,
-  tab,
-  onTabChange,
   skipped,
   soloing,
   onPlay,
@@ -2400,8 +2402,6 @@ function ClipInspector({
   isOwner: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  tab: InspectorTab;
-  onTabChange: (tab: InspectorTab) => void;
   skipped: boolean;
   soloing: boolean;
   onPlay: () => void;
@@ -2412,30 +2412,102 @@ function ClipInspector({
   editorPxPerSec: number;
   onZoom: (fn: (p: number) => number) => void;
 }) {
-  const showBody = open && clip != null;
+  const [view, setView] = useState<InspectorView>(readInspectorView);
+  const sectionRef = useRef<HTMLElement>(null);
+  /**
+   * Inspector height in the wave view. The comments view reuses it, so
+   * toggling never resizes the panel (and the sequence above it).
+   */
+  const [waveHeight, setWaveHeight] = useState<number | null>(null);
+  const hasClip = clip != null;
+  const measureWave = open && view === "wave" && hasClip;
+  useLayoutEffect(() => {
+    const el = sectionRef.current;
+    if (!el || !measureWave) return;
+    const ro = new ResizeObserver(() => setWaveHeight(el.offsetHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measureWave]);
+
+  function showView(next: InspectorView) {
+    setView(next);
+    writeStored(INSPECTOR_VIEW_KEY, next);
+    if (!open) onOpenChange(true);
+  }
+
+  if (!clip) {
+    return (
+      <section
+        className="arr-inspector arr-inspector-closed"
+        aria-label="Clip inspector"
+      >
+        <div className="arr-inspector-bar">
+          <span className="arr-muted">Select a clip to trim and edit.</span>
+        </div>
+      </section>
+    );
+  }
+
+  const scale = track ? trimScale(clip, track, editorPxPerSec) : null;
+  const showBody = open;
+  const commentCount = track?.comments.length ?? 0;
+  const commentsView = open && view === "comments";
+
   return (
     <section
+      ref={sectionRef}
       className={showBody ? "arr-inspector" : "arr-inspector arr-inspector-closed"}
+      style={
+        commentsView ? { height: waveHeight ?? DEFAULT_INSPECTOR_H } : undefined
+      }
       aria-label="Clip inspector"
     >
       <div className="arr-inspector-bar">
-        {clip ? (
+        <button
+          type="button"
+          className="arr-inspector-toggle"
+          aria-expanded={open}
+          title={open ? "Collapse to the toolbar" : "Expand"}
+          onClick={() => onOpenChange(!open)}
+        >
+          {open ? "▾" : "▸"}
+        </button>
+        <span className="arr-view-toggle" role="group" aria-label="Show">
+          <button
+            type="button"
+            className={
+              open && view === "wave"
+                ? "filterButton filterSelected"
+                : "filterButton"
+            }
+            aria-pressed={open && view === "wave"}
+            title="Show the trim waveform"
+            onClick={() => showView("wave")}
+          >
+            wave
+          </button>
+          <button
+            type="button"
+            className={
+              open && view === "comments"
+                ? "filterButton filterSelected"
+                : "filterButton"
+            }
+            aria-pressed={open && view === "comments"}
+            title="Show this track's comments (edit them in the library list)"
+            onClick={() => showView("comments")}
+          >
+            comments{commentCount > 0 ? ` (${commentCount})` : ""}
+          </button>
+        </span>
+        <span
+          className="arr-inspector-title"
+          title={track?.filename ?? clip.trackId}
+        >
+          {index + 1}. {track ? shortTitle(track.filename) : "missing track"}
+        </span>
+        {!commentsView && (
           <>
-            <button
-              type="button"
-              className="arr-inspector-toggle"
-              aria-expanded={open}
-              title={open ? "Collapse inspector" : "Expand inspector"}
-              onClick={() => onOpenChange(!open)}
-            >
-              {open ? "▾" : "▸"}
-            </button>
-            <span
-              className="arr-inspector-title"
-              title={track?.filename ?? clip.trackId}
-            >
-              {index + 1}. {track ? shortTitle(track.filename) : "missing track"}
-            </span>
             <button
               type="button"
               disabled={skipped}
@@ -2452,58 +2524,175 @@ function ClipInspector({
             >
               {soloing ? "■" : "▶"}
             </button>
-            <div className="arr-tabs" role="tablist">
-              {INSPECTOR_TABS.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={open && tab === t.id}
-                  className={
-                    open && tab === t.id ? "arr-tab arr-tab-on" : "arr-tab"
-                  }
-                  onClick={() => onTabChange(t.id)}
+
+            <span className="arr-insp-group">
+              {isOwner ? (
+                <>
+                  <label className="arr-field-inline">
+                    in
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.1}
+                      value={Number(clip.inSec.toFixed(2))}
+                      onChange={(e) =>
+                        onChange({ inSec: Number(e.target.value) || 0 })
+                      }
+                    />
+                  </label>
+                  <label className="arr-field-inline">
+                    out
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.1}
+                      value={Number(clip.outSec.toFixed(2))}
+                      onChange={(e) =>
+                        onChange({ outSec: Number(e.target.value) || 0 })
+                      }
+                    />
+                  </label>
+                </>
+              ) : (
+                <span className="arr-field-inline">
+                  in {formatClockTenths(clip.inSec)} · out{" "}
+                  {formatClockTenths(clip.outSec)}
+                </span>
+              )}
+              <span
+                className="arr-muted"
+                title="Selection length of full source length"
+              >
+                {formatClock(clipDuration(clip))}
+                {scale ? ` of ${formatClock(scale.srcDur)}` : ""}
+              </span>
+            </span>
+
+            <span className="arr-insp-group">
+              {isOwner ? (
+                <label className="arr-field-inline" title="Silence after this clip">
+                  pause
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={clip.pauseSec}
+                    onChange={(e) =>
+                      onChange({ pauseSec: Number(e.target.value) || 0 })
+                    }
+                  />
+                  s
+                </label>
+              ) : (
+                <span className="arr-field-inline">
+                  pause{" "}
+                  {clip.pauseSec > 0 ? formatPause(clip.pauseSec) : "none"}
+                </span>
+              )}
+              {isOwner ? (
+                <label className="arr-field-inline">
+                  gain
+                  <input
+                    type="range"
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    value={clip.gain}
+                    onChange={(e) => onChange({ gain: Number(e.target.value) })}
+                  />
+                  <span className="arr-gain-val">×{clip.gain.toFixed(2)}</span>
+                </label>
+              ) : (
+                <span className="arr-field-inline">
+                  gain ×{clip.gain.toFixed(2)}
+                </span>
+              )}
+            </span>
+
+            <span className="arr-insp-group">
+              <label
+                className="arr-field-inline arr-skip-field"
+                title="Leave this clip out of playback. This session only; not saved."
+              >
+                <input
+                  type="checkbox"
+                  className="track-check"
+                  checked={skipped}
+                  onChange={onToggleSkip}
+                />
+                skip <span className="arr-muted">(not saved)</span>
+              </label>
+              {track?.releasedOn && (
+                <span
+                  className="arr-released-warn"
+                  title={`Already released on ${track.releasedOn}`}
                 >
-                  {t.label}
-                  {t.id === "comments" && track && track.comments.length > 0
-                    ? ` (${track.comments.length})`
-                    : ""}
-                </button>
-              ))}
-            </div>
+                  released {track.releasedOn}
+                </span>
+              )}
+            </span>
+
+            <span className="arr-spacer" />
+
+
+            {scale && open && (
+              <span className="arr-insp-group">
+                <span className="arr-zoom" role="group" aria-label="Waveform zoom">
+                  <button
+                    type="button"
+                    className="filterButton"
+                    title="Zoom out waveform"
+                    onClick={() =>
+                      onZoom((p) => Math.max(PX_PER_SEC_MIN, p / 1.25))
+                    }
+                  >
+                    −
+                  </button>
+                  <button
+                    type="button"
+                    className="filterButton"
+                    title="Zoom in waveform"
+                    onClick={() => onZoom((p) => Math.min(scale.maxPx, p * 1.25))}
+                  >
+                    +
+                  </button>
+                </span>
+                <span className="arr-muted">
+                  {formatPxPerSec(scale.effectivePx)} px/s
+                </span>
+              </span>
+            )}
+
+            {isOwner && (
+              <button
+                type="button"
+                className="filterButton arr-danger-btn"
+                onClick={onRemove}
+              >
+                remove
+              </button>
+            )}
           </>
-        ) : (
-          <span className="arr-muted">Select a clip to trim and edit.</span>
         )}
       </div>
+
       {showBody && (
-        <div className="arr-inspector-body" role="tabpanel">
-          {!track ? (
-            <p className="arr-inspector-empty">
-              This track is missing from the library.
-            </p>
-          ) : tab === "trim" ? (
-            <TrimTab
+        <div className="arr-inspector-body">
+          {view === "comments" ? (
+            <CommentsPanel track={track} />
+          ) : track && scale ? (
+            <TrimEditor
               clip={clip}
-              track={track}
               isOwner={isOwner}
               peaksVersion={peaksVersion}
-              editorPxPerSec={editorPxPerSec}
-              onZoom={onZoom}
-              onChange={onChange}
-            />
-          ) : tab === "clip" ? (
-            <ClipTab
-              clip={clip}
-              track={track}
-              isOwner={isOwner}
-              skipped={skipped}
-              onToggleSkip={onToggleSkip}
-              onRemove={onRemove}
+              srcDur={scale.srcDur}
+              pxPerSec={scale.effectivePx}
               onChange={onChange}
             />
           ) : (
-            <CommentsTab track={track} />
+            <p className="arr-inspector-empty arr-trim">
+              This track is missing from the library.
+            </p>
           )}
         </div>
       )}
@@ -2511,21 +2700,19 @@ function ClipInspector({
   );
 }
 
-function TrimTab({
+function TrimEditor({
   clip,
-  track,
   isOwner,
   peaksVersion,
-  editorPxPerSec,
-  onZoom,
+  srcDur,
+  pxPerSec,
   onChange,
 }: {
   clip: ArrangementClip;
-  track: Track;
   isOwner: boolean;
   peaksVersion: number;
-  editorPxPerSec: number;
-  onZoom: (fn: (p: number) => number) => void;
+  srcDur: number;
+  pxPerSec: number;
   onChange: (patch: ClipPatch) => void;
 }) {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -2536,16 +2723,9 @@ function TrimTab({
     fixedLen?: number;
   } | null>(null);
 
-  const peaks = getCachedPeaks(clip.trackId) ?? null;
-  const srcDur = sourceDuration(track, peaks);
-  const maxPx = Math.min(
-    PX_PER_SEC_MAX,
-    MAX_EDITOR_CSS_PX / Math.max(srcDur, MIN_CLIP_SEC),
-  );
-  const effectivePx = Math.min(editorPxPerSec, Math.max(PX_PER_SEC_MIN, maxPx));
-  const widthPx = Math.max(320, srcDur * effectivePx);
-  const inX = Math.round(clip.inSec * effectivePx);
-  const outX = Math.round(clip.outSec * effectivePx);
+  const widthPx = Math.max(320, srcDur * pxPerSec);
+  const inX = Math.round(clip.inSec * pxPerSec);
+  const outX = Math.round(clip.outSec * pxPerSec);
   const selW = Math.max(4, outX - inX);
 
   /** X in canvas content coordinates (matches selection `left` / waveform). */
@@ -2571,7 +2751,7 @@ function TrimTab({
     el.setPointerCapture(e.pointerId);
 
     const x = pointerCanvasX(e.clientX);
-    const at = x / effectivePx;
+    const at = x / pxPerSec;
 
     if (kind === "range") {
       dragRef.current = {
@@ -2589,7 +2769,7 @@ function TrimTab({
       const d = dragRef.current;
       const c = clipRef.current;
       if (!d || !c) return;
-      const atMove = pointerCanvasX(ev.clientX) / effectivePx;
+      const atMove = pointerCanvasX(ev.clientX) / pxPerSec;
 
       if (d.kind === "in") {
         const next = atMove - d.grabOffset;
@@ -2622,65 +2802,6 @@ function TrimTab({
 
   return (
     <div className="arr-trim">
-      <div className="arr-trim-header">
-        <span className="arr-muted">
-          full {formatClock(srcDur)} · selection{" "}
-          {formatClock(clipDuration(clip))}
-        </span>
-        {isOwner ? (
-          <>
-            <label className="arr-field-inline">
-              in
-              <input
-                type="number"
-                min={0}
-                step={0.1}
-                value={Number(clip.inSec.toFixed(2))}
-                onChange={(e) =>
-                  onChange({ inSec: Number(e.target.value) || 0 })
-                }
-              />
-            </label>
-            <label className="arr-field-inline">
-              out
-              <input
-                type="number"
-                min={0}
-                step={0.1}
-                value={Number(clip.outSec.toFixed(2))}
-                onChange={(e) =>
-                  onChange({ outSec: Number(e.target.value) || 0 })
-                }
-              />
-            </label>
-          </>
-        ) : (
-          <span className="arr-muted">
-            in {formatClockTenths(clip.inSec)} · out{" "}
-            {formatClockTenths(clip.outSec)}
-          </span>
-        )}
-        <span className="arr-spacer" />
-        <span className="arr-zoom" role="group" aria-label="Waveform zoom">
-          <button
-            type="button"
-            className="filterButton"
-            title="Zoom out waveform"
-            onClick={() => onZoom((p) => Math.max(PX_PER_SEC_MIN, p / 1.25))}
-          >
-            −
-          </button>
-          <button
-            type="button"
-            className="filterButton"
-            title="Zoom in waveform"
-            onClick={() => onZoom((p) => Math.min(maxPx, p * 1.25))}
-          >
-            +
-          </button>
-        </span>
-        <span className="arr-muted">{formatPxPerSec(effectivePx)} px/s</span>
-      </div>
       <div className="arr-trim-scroll">
         <div
           className="arr-trim-canvas"
@@ -2724,116 +2845,25 @@ function TrimTab({
   );
 }
 
-function ClipTab({
-  clip,
-  track,
-  isOwner,
-  skipped,
-  onToggleSkip,
-  onRemove,
-  onChange,
-}: {
-  clip: ArrangementClip;
-  track: Track;
-  isOwner: boolean;
-  skipped: boolean;
-  onToggleSkip: () => void;
-  onRemove: () => void;
-  onChange: (patch: ClipPatch) => void;
-}) {
-  return (
-    <div className="arr-clip-form">
-      <span className="arr-field-label">pause after</span>
-      {isOwner ? (
-        <label className="arr-field-inline">
-          <input
-            type="number"
-            min={0}
-            step={0.5}
-            value={clip.pauseSec}
-            aria-label="Pause after clip, seconds"
-            onChange={(e) =>
-              onChange({ pauseSec: Number(e.target.value) || 0 })
-            }
-          />
-          s
-        </label>
-      ) : (
-        <span>{clip.pauseSec > 0 ? formatPause(clip.pauseSec) : "none"}</span>
-      )}
-
-      <span className="arr-field-label">gain</span>
-      {isOwner ? (
-        <label className="arr-field-inline">
-          <input
-            type="range"
-            min={0}
-            max={2}
-            step={0.05}
-            value={clip.gain}
-            aria-label="Gain"
-            onChange={(e) => onChange({ gain: Number(e.target.value) })}
-          />
-          <span className="arr-gain-val">×{clip.gain.toFixed(2)}</span>
-        </label>
-      ) : (
-        <span>×{clip.gain.toFixed(2)}</span>
-      )}
-
-      <span className="arr-field-label">playback</span>
-      <label className="arr-field-inline arr-skip-field">
-        <input
-          type="checkbox"
-          className="track-check"
-          checked={skipped}
-          onChange={onToggleSkip}
-        />
-        skip in playback
-        <span className="arr-muted">— this session only, not saved</span>
-      </label>
-
-      {track.releasedOn && (
-        <>
-          <span className="arr-field-label">released</span>
-          <span className="arr-released-text">{track.releasedOn}</span>
-        </>
-      )}
-
-      {isOwner && (
-        <>
-          <span />
-          <span>
-            <button
-              type="button"
-              className="filterButton arr-danger-btn"
-              onClick={onRemove}
-            >
-              remove from arrangement
-            </button>
-          </span>
-        </>
-      )}
-    </div>
-  );
-}
-
-function CommentsTab({ track }: { track: Track }) {
-  const comments = track.comments;
-  if (comments.length === 0) {
-    return (
-      <p className="arr-inspector-empty">
-        No comments — edit in the library list.
-      </p>
-    );
-  }
+/** Read-only comments for the selected track; editing stays in the library. */
+function CommentsPanel({ track }: { track: Track | null }) {
+  const comments = track?.comments ?? [];
   return (
     <div className="arr-comments">
-      <ul className="arr-comments-list">
-        {comments.map((c) => (
-          <CommentRow key={c.id} comment={c} />
-        ))}
-      </ul>
-      <p className="arr-comments-foot">Edit comments in the library list.</p>
+      {comments.length === 0 ? (
+        <p className="arr-comments-foot">
+          No comments — edit in the library list.
+        </p>
+      ) : (
+        <>
+          <ul className="arr-comments-list">
+            {comments.map((c) => (
+              <CommentRow key={c.id} comment={c} />
+            ))}
+          </ul>
+          <p className="arr-comments-foot">Edit comments in the library list.</p>
+        </>
+      )}
     </div>
   );
 }
