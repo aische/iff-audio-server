@@ -13,11 +13,13 @@ import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import bcrypt from "bcrypt";
 import dotenv from "dotenv";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import {
   arrangements,
   comments,
   createDb,
+  tags,
+  trackTags,
   tracks,
   users,
   type ArrangementClip,
@@ -316,9 +318,31 @@ app.get("/tracks", async (request, reply) => {
     byTrack.set(trackId, list);
   }
 
+  const tagRows = await db
+    .select({
+      trackId: trackTags.trackId,
+      tagId: trackTags.tagId,
+      addedAt: trackTags.addedAt,
+      addedByEmail: users.email,
+    })
+    .from(trackTags)
+    .leftJoin(users, eq(trackTags.addedBy, users.id))
+    .orderBy(asc(trackTags.addedAt));
+
+  const tagsByTrack = new Map<
+    string,
+    { tagId: string; addedAt: Date; addedByEmail: string | null }[]
+  >();
+  for (const { trackId, ...rest } of tagRows) {
+    const list = tagsByTrack.get(trackId) ?? [];
+    list.push(rest);
+    tagsByTrack.set(trackId, list);
+  }
+
   return rows.map((track) => ({
     ...track,
     comments: byTrack.get(track.id) ?? [],
+    tags: tagsByTrack.get(track.id) ?? [],
   }));
 });
 
@@ -518,6 +542,234 @@ app.put<{
       userId: row.userId,
       userEmail: user?.email ?? "",
     };
+  },
+);
+
+// --- Shared tags ---
+
+const TAG_NAME_RE = /^[A-Za-z0-9_:-]{1,64}$/;
+const tagNameField = { type: "string", maxLength: 100 };
+const tagCategoryField = { type: ["string", "null"], maxLength: 100 };
+
+/** Strip a leading '#' and whitespace; null if not a valid tag name. */
+function normalizeTagName(raw: string): string | null {
+  const name = raw.trim().replace(/^#+/, "");
+  return TAG_NAME_RE.test(name) ? name : null;
+}
+
+/** Trimmed category, null when empty. */
+function normalizeCategory(raw: string | null): string | null {
+  return raw?.trim().slice(0, 40) || null;
+}
+
+const tagColumns = {
+  id: tags.id,
+  name: tags.name,
+  category: tags.category,
+};
+
+/** Existing tag by name: exact match first, else case-insensitive. */
+async function findTagByName(name: string, excludeId?: string) {
+  const rows = await db
+    .select(tagColumns)
+    .from(tags)
+    .where(
+      and(
+        sql`lower(${tags.name}) = lower(${name})`,
+        excludeId ? ne(tags.id, excludeId) : undefined,
+      ),
+    );
+  return rows.find((r) => r.name === name) ?? rows[0] ?? null;
+}
+
+app.get("/tags", async (request, reply) => {
+  const userId = requireUser(request);
+  if (!userId) return reply.code(401).send({ error: "unauthorized" });
+
+  return db.select(tagColumns).from(tags).orderBy(asc(tags.name));
+});
+
+/** Add a shared tag to a track by name; creates the tag if it is new. */
+app.post<{ Params: { id: string }; Body: { name?: string } }>(
+  "/tracks/:id/tags",
+  {
+    schema: { params: idParams, body: bodyOf({ name: tagNameField }) },
+  },
+  async (request, reply) => {
+    const userId = requireUser(request);
+    if (!userId) return reply.code(401).send({ error: "unauthorized" });
+
+    const name = normalizeTagName(request.body?.name ?? "");
+    if (!name) {
+      return reply.code(400).send({
+        error: "tag name: 1-64 letters, digits, _ : or -",
+      });
+    }
+
+    const [track] = await db
+      .select({ id: tracks.id })
+      .from(tracks)
+      .where(eq(tracks.id, request.params.id))
+      .limit(1);
+    if (!track) return reply.code(404).send({ error: "not found" });
+
+    let tag = await findTagByName(name);
+    if (!tag) {
+      await db
+        .insert(tags)
+        .values({ name, createdBy: userId })
+        .onConflictDoNothing({ target: tags.name });
+      tag = await findTagByName(name);
+    }
+    if (!tag) return reply.code(500).send({ error: "could not create tag" });
+
+    await db
+      .insert(trackTags)
+      .values({ trackId: track.id, tagId: tag.id, addedBy: userId })
+      .onConflictDoNothing();
+
+    const [link] = await db
+      .select({
+        tagId: trackTags.tagId,
+        addedAt: trackTags.addedAt,
+        addedByEmail: users.email,
+      })
+      .from(trackTags)
+      .leftJoin(users, eq(trackTags.addedBy, users.id))
+      .where(and(eq(trackTags.trackId, track.id), eq(trackTags.tagId, tag.id)))
+      .limit(1);
+
+    return { tag, link };
+  },
+);
+
+app.delete<{ Params: { id: string; tagId: string } }>(
+  "/tracks/:id/tags/:tagId",
+  {
+    schema: {
+      params: {
+        type: "object",
+        required: ["id", "tagId"],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          tagId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+  },
+  async (request, reply) => {
+    const userId = requireUser(request);
+    if (!userId) return reply.code(401).send({ error: "unauthorized" });
+
+    await db
+      .delete(trackTags)
+      .where(
+        and(
+          eq(trackTags.trackId, request.params.id),
+          eq(trackTags.tagId, request.params.tagId),
+        ),
+      );
+    return reply.code(204).send();
+  },
+);
+
+/**
+ * Rename and/or recategorize a tag. Renaming onto another tag's name
+ * (case-insensitive) merges this tag into it.
+ */
+app.patch<{
+  Params: { id: string };
+  Body: { name?: string; category?: string | null };
+}>(
+  "/tags/:id",
+  {
+    schema: {
+      params: idParams,
+      body: bodyOf({ name: tagNameField, category: tagCategoryField }),
+    },
+  },
+  async (request, reply) => {
+    const userId = requireUser(request);
+    if (!userId) return reply.code(401).send({ error: "unauthorized" });
+
+    const body = request.body ?? {};
+    const [tag] = await db
+      .select(tagColumns)
+      .from(tags)
+      .where(eq(tags.id, request.params.id))
+      .limit(1);
+    if (!tag) return reply.code(404).send({ error: "not found" });
+
+    const patch: { name?: string; category?: string | null } = {};
+    if (body.name !== undefined) {
+      const name = normalizeTagName(body.name);
+      if (!name) {
+        return reply.code(400).send({
+          error: "tag name: 1-64 letters, digits, _ : or -",
+        });
+      }
+      patch.name = name;
+    }
+    if (body.category !== undefined) {
+      patch.category = normalizeCategory(body.category);
+    }
+    if (patch.name === undefined && patch.category === undefined) {
+      return reply.code(400).send({ error: "name or category required" });
+    }
+
+    const target =
+      patch.name !== undefined
+        ? await findTagByName(patch.name, tag.id)
+        : null;
+
+    if (target) {
+      // Merge: move this tag's tracks onto the target, then drop this tag.
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`
+          INSERT INTO ${trackTags} (track_id, tag_id, added_by, added_at)
+          SELECT track_id, ${target.id}, added_by, added_at
+          FROM ${trackTags} WHERE tag_id = ${tag.id}
+          ON CONFLICT DO NOTHING`);
+        await tx.delete(tags).where(eq(tags.id, tag.id));
+        if (patch.category !== undefined) {
+          await tx
+            .update(tags)
+            .set({ category: patch.category })
+            .where(eq(tags.id, target.id));
+        }
+      });
+      const [merged] = await db
+        .select(tagColumns)
+        .from(tags)
+        .where(eq(tags.id, target.id))
+        .limit(1);
+      return { tag: merged, mergedFrom: tag.id };
+    }
+
+    const [updated] = await db
+      .update(tags)
+      .set(patch)
+      .where(eq(tags.id, tag.id))
+      .returning(tagColumns);
+    return { tag: updated, mergedFrom: null };
+  },
+);
+
+app.delete<{ Params: { id: string } }>(
+  "/tags/:id",
+  { schema: { params: idParams } },
+  async (request, reply) => {
+    const userId = requireUser(request);
+    if (!userId) return reply.code(401).send({ error: "unauthorized" });
+
+    const deleted = await db
+      .delete(tags)
+      .where(eq(tags.id, request.params.id))
+      .returning({ id: tags.id });
+    if (deleted.length === 0) {
+      return reply.code(404).send({ error: "not found" });
+    }
+    return reply.code(204).send();
   },
 );
 

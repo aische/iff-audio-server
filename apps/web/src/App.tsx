@@ -1,14 +1,13 @@
 import { useEffect, useState, type FormEvent } from "react";
-import {
-  api,
-  unifiedTags,
-  type Comment,
-  type Track,
-  type User,
-} from "./api";
+import { api, type Comment, type Tag, type Track, type User } from "./api";
 import { ArrangeShell, type ArrangeAddApi } from "./ArrangeView";
 import { newClipForTrack } from "./clips";
 import { TrackInspector } from "./TrackInspector";
+import {
+  TagManager,
+  type TagManagerActions,
+  type TrackTagActions,
+} from "./Tags";
 import Transport from "./Transport";
 import {
   ChangePasswordPanel,
@@ -25,11 +24,13 @@ import {
   filterTracks,
   persistHideReleased,
   persistMode,
+  persistSearchScope,
   persistShowInspector,
   persistShowOthers,
   persistSort,
   readHideReleased,
   readMode,
+  readSearchScope,
   readShowInspector,
   readShowOthers,
   readSort,
@@ -38,6 +39,7 @@ import {
   type AppMode,
   type FilterId,
   type PoolSort,
+  type SearchScope,
   type SortKey,
 } from "./uiPersist";
 
@@ -165,6 +167,7 @@ function StudioShell({
   onError: (message: string | null) => void;
 }) {
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState<Track | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -173,11 +176,16 @@ function StudioShell({
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterId>("all");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [searchScope, setSearchScope] = useState(readSearchScope);
+  // Not persisted: tag removal starts off on every load.
+  const [tagEditing, setTagEditing] = useState(false);
   const [showOthers, setShowOthers] = useState(readShowOthers);
   const [hideReleased, setHideReleased] = useState(readHideReleased);
   const [sort, setSort] = useState(readSort);
   const [showInspector, setShowInspector] = useState(readShowInspector);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [tagsOpen, setTagsOpen] = useState(false);
   const [mode, setMode] = useState<AppMode>(readMode);
   // Mounted on first visit, then kept (hidden in pool mode) so the open
   // arrangement and its pending edits survive mode switches.
@@ -207,8 +215,14 @@ function StudioShell({
     (async () => {
       setLoading(true);
       try {
-        const rows = await api.listTracks();
-        if (!cancelled) setTracks(rows);
+        const [rows, tagRows] = await Promise.all([
+          api.listTracks(),
+          api.listTags(),
+        ]);
+        if (!cancelled) {
+          setTracks(rows);
+          setTags(tagRows);
+        }
       } catch (err) {
         if (!cancelled) {
           onError(err instanceof Error ? err.message : "Failed to load tracks");
@@ -235,6 +249,11 @@ function StudioShell({
   function setShowOthersPersist(value: boolean) {
     setShowOthers(value);
     persistShowOthers(value);
+  }
+
+  function setSearchScopePersist(value: SearchScope) {
+    setSearchScope(value);
+    persistSearchScope(value);
   }
 
   function setHideReleasedPersist(value: boolean) {
@@ -283,15 +302,116 @@ function StudioShell({
     if (playingArr) setPlaying(null);
   }
 
-  const allTags = unifiedTags(
-    tracks.flatMap((t) => t.comments.map((c) => c.body)),
-  );
+  const tagsById = new Map(tags.map((t) => [t.id, t]));
+  const tagCounts = new Map<string, number>();
+  for (const t of tracks) {
+    for (const l of t.tags) {
+      tagCounts.set(l.tagId, (tagCounts.get(l.tagId) ?? 0) + 1);
+    }
+  }
+  // A deleted or merged tag no longer filters anything.
+  const activeTagFilter =
+    tagFilter && tagsById.has(tagFilter) ? tagFilter : null;
+
+  function errorMessage(err: unknown, fallback: string) {
+    return err instanceof Error ? err.message : fallback;
+  }
+
+  const tagActions: TrackTagActions = {
+    onAdd: async (trackId, name) => {
+      try {
+        const { tag, link } = await api.addTrackTag(trackId, name);
+        setTags((prev) =>
+          prev.some((t) => t.id === tag.id) ? prev : [...prev, tag],
+        );
+        setTracks((prev) =>
+          prev.map((t) =>
+            t.id !== trackId || t.tags.some((l) => l.tagId === tag.id)
+              ? t
+              : { ...t, tags: [...t.tags, link] },
+          ),
+        );
+        onError(null);
+        return true;
+      } catch (err) {
+        onError(errorMessage(err, "Failed to add tag"));
+        return false;
+      }
+    },
+    onRemove: async (trackId, tagId) => {
+      try {
+        await api.removeTrackTag(trackId, tagId);
+        setTracks((prev) =>
+          prev.map((t) =>
+            t.id === trackId
+              ? { ...t, tags: t.tags.filter((l) => l.tagId !== tagId) }
+              : t,
+          ),
+        );
+        onError(null);
+      } catch (err) {
+        onError(errorMessage(err, "Failed to remove tag"));
+      }
+    },
+  };
+
+  const tagManagerActions: TagManagerActions = {
+    onUpdate: async (tagId, patch) => {
+      try {
+        const { tag, mergedFrom } = await api.updateTag(tagId, patch);
+        if (mergedFrom) {
+          // Links of the merged tag now point at the target (no duplicates).
+          setTracks((prev) =>
+            prev.map((t) => {
+              const from = t.tags.find((l) => l.tagId === mergedFrom);
+              if (!from) return t;
+              const rest = t.tags.filter((l) => l.tagId !== mergedFrom);
+              return rest.some((l) => l.tagId === tag.id)
+                ? { ...t, tags: rest }
+                : { ...t, tags: [...rest, { ...from, tagId: tag.id }] };
+            }),
+          );
+          if (tagFilter === mergedFrom) setTagFilter(tag.id);
+        }
+        setTags((prev) =>
+          prev
+            .filter((t) => t.id !== mergedFrom)
+            .map((t) => (t.id === tag.id ? tag : t)),
+        );
+        onError(null);
+        return true;
+      } catch (err) {
+        onError(errorMessage(err, "Failed to update tag"));
+        return false;
+      }
+    },
+    onDelete: async (tagId) => {
+      try {
+        await api.deleteTag(tagId);
+        setTags((prev) => prev.filter((t) => t.id !== tagId));
+        setTracks((prev) =>
+          prev.map((t) =>
+            t.tags.some((l) => l.tagId === tagId)
+              ? { ...t, tags: t.tags.filter((l) => l.tagId !== tagId) }
+              : t,
+          ),
+        );
+        onError(null);
+      } catch (err) {
+        onError(errorMessage(err, "Failed to delete tag"));
+      }
+    },
+  };
 
   const filtered = filterTracks({
     tracks,
     hideReleased,
     filter,
-    tagFilter,
+    tagFilter: activeTagFilter,
+    search,
+    searchScope,
+    userId: user.id,
+    tagsById,
   });
   const visible = sortTracks(filtered, sort);
   // Last hovered track wins; the selected row is only the initial fallback.
@@ -358,15 +478,22 @@ function StudioShell({
 
   const filters = {
     filter,
-    tagFilter,
+    tagFilter: activeTagFilter,
     hideReleased,
     showOthers,
     sort,
-    allTags,
+    tags,
+    tagCounts,
+    search,
+    searchScope,
+    tagEditing,
     visibleCount: visible.length,
     visibleTotalSec,
     onFilter: setFilter,
     onTagFilter: setTagFilter,
+    onSearch: setSearch,
+    onSearchScope: setSearchScopePersist,
+    onTagEditing: setTagEditing,
     onHideReleased: setHideReleasedPersist,
     onShowOthers: setShowOthersPersist,
     onToggleSort: toggleSort,
@@ -420,6 +547,17 @@ function StudioShell({
             >
               info
             </button>
+            <button
+              type="button"
+              className={
+                tagsOpen ? "filterButton filterSelected" : "filterButton"
+              }
+              aria-pressed={tagsOpen}
+              title="Manage band tags: rename, merge, categorize, delete"
+              onClick={() => setTagsOpen((v) => !v)}
+            >
+              tags
+            </button>
             <span className="user-email">{user.email}</span>
             <button
               type="button"
@@ -471,6 +609,16 @@ function StudioShell({
         />
       )}
 
+      {tagsOpen && (
+        <TagManager
+          tags={tags}
+          counts={tagCounts}
+          actions={tagManagerActions}
+          onError={onError}
+          onClose={() => setTagsOpen(false)}
+        />
+      )}
+
       {error && <p className="error">{error}</p>}
 
       <div
@@ -499,7 +647,11 @@ function StudioShell({
               selectedId={selectedId}
               checks={checks}
               showOthers={showOthers}
-              tagFilter={tagFilter}
+              tagFilter={activeTagFilter}
+              tags={tags}
+              tagsById={tagsById}
+              tagActions={tagActions}
+              tagEditing={tagEditing}
               sort={sort}
               canDragToArrange={
                 mode === "arrange" && !!arrangeApi?.isOwner
@@ -560,6 +712,7 @@ function StudioShell({
         <TrackInspector
           track={inspected}
           user={user}
+          tagsById={tagsById}
           onHide={() => setShowInspectorPersist(false)}
         />
       )}

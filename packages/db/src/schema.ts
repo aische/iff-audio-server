@@ -9,6 +9,7 @@ import {
   jsonb,
   real,
   unique,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
@@ -40,7 +41,10 @@ export const tracks = pgTable("tracks", {
     .notNull(),
 });
 
-/** One comment per (user, track). Tags are derived from #tokens in body. */
+/**
+ * One comment per (user, track). `#words` in the body are personal keywords
+ * (highlighted, searchable); shared tags live in `tags` / `track_tags`.
+ */
 export const comments = pgTable(
   "comments",
   {
@@ -60,6 +64,44 @@ export const comments = pgTable(
       .notNull(),
   },
   (t) => [unique("comments_user_track_unique").on(t.userId, t.trackId)],
+);
+
+/**
+ * Band-wide tag vocabulary; anyone can create, rename, merge or delete.
+ * Names are unique as stored; the API matches case-insensitively so new
+ * near-duplicates are not created.
+ */
+export const tags = pgTable("tags", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull().unique(),
+  /** Optional grouping for browsing (e.g. "mood", "status"); null = none. */
+  category: text("category"),
+  createdBy: uuid("created_by").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+/** Shared tag on a track; `addedBy` is kept for attribution only. */
+export const trackTags = pgTable(
+  "track_tags",
+  {
+    trackId: uuid("track_id")
+      .notNull()
+      .references(() => tracks.id, { onDelete: "cascade" }),
+    tagId: uuid("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+    addedBy: uuid("added_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    addedAt: timestamp("added_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.trackId, t.tagId] })],
 );
 
 /**

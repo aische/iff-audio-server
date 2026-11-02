@@ -50,6 +50,13 @@
       "when": 1792667679440,
       "tag": "0006_peaks_released",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793636219466,
+      "tag": "0007_shared_tags",
+      "breakpoints": true
     }
   ]
 }
