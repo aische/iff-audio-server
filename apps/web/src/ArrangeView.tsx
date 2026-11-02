@@ -8,6 +8,8 @@ import {
   useSyncExternalStore,
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type RefObject,
 } from "react";
 import {
   api,
@@ -42,9 +44,7 @@ function arrangementSnapshot(name: string, clips: ArrangementClip[]) {
   return JSON.stringify({ name, clips });
 }
 
-const ROW_WAVE_H = 40;
 const EDITOR_WAVE_H = 96;
-const PX_PER_SEC_DEFAULT = 24;
 const PX_PER_SEC_MIN = 2;
 const PX_PER_SEC_MAX = 200;
 const EDITOR_PX_DEFAULT = 40;
@@ -79,20 +79,63 @@ const LOOKAHEAD_SEC = 0.2;
 /** Show "loading…" only when audio is held up longer than this. */
 const WAITING_HINT_MS = 200;
 const PLAYBACK_MODE_KEY = "iff-arrange-playback";
+const INSPECTOR_OPEN_KEY = "iff-arrange-inspector-open";
+const INSPECTOR_VIEW_KEY = "iff-arrange-inspector-view";
+
+/** What the inspector shows below its bar. */
+type InspectorView = "wave" | "comments";
+/** Overview zoom: 1 = whole arrangement fits the strip. */
+const OVERVIEW_ZOOM_MAX = 32;
+
+const PLAYBACK_MODE_LABEL: Record<PlaybackMode, { name: string; hint: string }> =
+  {
+    stream: {
+      name: "Fast",
+      hint: "Streams audio; light; transitions within ~50 ms",
+    },
+    precise: {
+      name: "Gapless",
+      hint: "Decodes current and next clip; waits to load",
+    },
+  };
+
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+}
+
+function readInspectorView(): InspectorView {
+  return readStored(INSPECTOR_VIEW_KEY) === "comments" ? "comments" : "wave";
+}
+
+function readInspectorOpen(): boolean {
+  return readStored(INSPECTOR_OPEN_KEY) !== "0";
+}
 
 function readPlaybackMode(): PlaybackMode {
-  try {
-    const raw = localStorage.getItem(PLAYBACK_MODE_KEY);
-    return raw === "precise" ? "precise" : "stream";
-  } catch {
-    return "stream";
-  }
+  return readStored(PLAYBACK_MODE_KEY) === "precise" ? "precise" : "stream";
 }
 
 function audioSegAt(segs: ScheduleSeg[], at: number) {
   return segs.find(
     (s) => s.kind === "audio" && at >= s.arrStart && at < s.arrEnd,
   );
+}
+
+/** Audio or pause segment under `at`. */
+function segAt(segs: ScheduleSeg[], at: number) {
+  return segs.find((s) => at >= s.arrStart && at < s.arrEnd);
 }
 
 /**
@@ -140,31 +183,23 @@ function PlayheadClock({ store }: { store: PlayheadStore }) {
   return <>{usePlayhead(store, formatClock)}</>;
 }
 
-/** Playhead line inside a sequence row; renders nothing outside the row's span. */
-function RowPlayhead({
-  store,
-  arrStart,
-  arrEnd,
-  pxPerSec,
-}: {
-  store: PlayheadStore;
-  arrStart: number;
-  arrEnd: number;
-  pxPerSec: number;
-}) {
-  const left = usePlayhead(store, (sec) =>
-    sec >= arrStart && sec < arrEnd
-      ? Math.round((sec - arrStart) * pxPerSec)
-      : null,
-  );
-  if (left == null) return null;
-  return <div className="arr-row-playhead" style={{ left }} />;
-}
-
 function formatPxPerSec(n: number) {
   if (n >= 10) return n.toFixed(0);
   if (n >= 1) return n.toFixed(1);
   return n.toFixed(2);
+}
+
+/** Short pause cue: "2s", "0.5s", or a clock for a minute and up. */
+function formatPause(sec: number) {
+  if (sec >= 60) return formatClock(sec);
+  return `${Number(sec.toFixed(1))}s`;
+}
+
+/** Clock with tenths, for trim points: "1:05.3". */
+function formatClockTenths(sec: number) {
+  const t = Math.max(0, Math.round(sec * 10) / 10);
+  const whole = Math.floor(t);
+  return `${formatClock(whole)}.${Math.round((t - whole) * 10)}`;
 }
 
 function sanitizeDownloadName(name: string) {
@@ -274,7 +309,6 @@ function ClipWaveform({
   width,
   height,
   peaksVersion,
-  dimOutside,
   sourceDurHint,
 }: {
   trackId: string;
@@ -283,8 +317,6 @@ function ClipWaveform({
   width: number;
   height: number;
   peaksVersion: number;
-  /** When set, draw full source and dim outside [offset, offset+duration]. */
-  dimOutside?: boolean;
   sourceDurHint?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -345,36 +377,16 @@ function ClipWaveform({
       return;
     }
 
-    if (dimOutside) {
-      drawClipWaveform(ctx, rec.peaks, srcDur, 0, srcDur, cssW, cssH);
-      const x0 = (offsetSec / srcDur) * cssW;
-      const x1 = ((offsetSec + durationSec) / srcDur) * cssW;
-      ctx.fillStyle = "rgba(26, 25, 23, 0.55)";
-      ctx.fillRect(0, 0, Math.max(0, x0), cssH);
-      ctx.fillRect(Math.min(cssW, x1), 0, Math.max(0, cssW - x1), cssH);
-      ctx.fillStyle = "rgba(212, 160, 23, 0.14)";
-      ctx.fillRect(x0, 0, Math.max(0, x1 - x0), cssH);
-    } else {
-      drawClipWaveform(
-        ctx,
-        rec.peaks,
-        srcDur,
-        offsetSec,
-        durationSec,
-        cssW,
-        cssH,
-      );
-    }
-  }, [
-    rec,
-    offsetSec,
-    durationSec,
-    width,
-    height,
-    peaksVersion,
-    dimOutside,
-    sourceDurHint,
-  ]);
+    // Full source, with everything outside [offset, offset + duration] dimmed.
+    drawClipWaveform(ctx, rec.peaks, srcDur, 0, srcDur, cssW, cssH);
+    const x0 = (offsetSec / srcDur) * cssW;
+    const x1 = ((offsetSec + durationSec) / srcDur) * cssW;
+    ctx.fillStyle = "rgba(26, 25, 23, 0.55)";
+    ctx.fillRect(0, 0, Math.max(0, x0), cssH);
+    ctx.fillRect(Math.min(cssW, x1), 0, Math.max(0, cssW - x1), cssH);
+    ctx.fillStyle = "rgba(212, 160, 23, 0.14)";
+    ctx.fillRect(x0, 0, Math.max(0, x1 - x0), cssH);
+  }, [rec, offsetSec, durationSec, width, height, peaksVersion, sourceDurHint]);
 
   return <canvas ref={canvasRef} className="arr-clip-wave" aria-hidden />;
 }
@@ -700,7 +712,8 @@ function ArrangeEditor({
   const [clips, setClips] = useState<ArrangementClip[]>([]);
   const [name, setName] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [pxPerSec, setPxPerSec] = useState(PX_PER_SEC_DEFAULT);
+  const [overviewZoom, setOverviewZoom] = useState(1);
+  const [inspectorOpen, setInspectorOpen] = useState(readInspectorOpen);
   const [editorPxPerSec, setEditorPxPerSec] = useState(EDITOR_PX_DEFAULT);
   const [playing, setPlaying] = useState(false);
   const [playhead] = useState(createPlayheadStore);
@@ -728,6 +741,7 @@ function ArrangeEditor({
   const savedSnapshotRef = useRef("");
   const saveSeqRef = useRef(0);
   const panelRef = useRef<HTMLDivElement>(null);
+  const sequenceRef = useRef<HTMLDivElement>(null);
 
   const [playbackMode, setPlaybackMode] =
     useState<PlaybackMode>(readPlaybackMode);
@@ -760,6 +774,11 @@ function ArrangeEditor({
   );
   const segsRef = useLatestRef(segs);
   const totalSecRef = useLatestRef(totalSec);
+  /** Clip whose audio or pause is under the playhead; changes at clip boundaries only. */
+  const headClipId = usePlayhead(
+    playhead,
+    (sec) => segAt(segs, sec)?.clip.instanceId ?? null,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -1093,11 +1112,7 @@ function ArrangeEditor({
     releaseEngine();
     playbackModeRef.current = mode;
     setPlaybackMode(mode);
-    try {
-      localStorage.setItem(PLAYBACK_MODE_KEY, mode);
-    } catch {
-      // ignore
-    }
+    writeStored(PLAYBACK_MODE_KEY, mode);
   }
 
   const releaseEngineOnUnmount = useEffectEvent(releaseEngine);
@@ -1224,8 +1239,7 @@ function ArrangeEditor({
       selectedId
     ) {
       e.preventDefault();
-      setClips((prev) => prev.filter((c) => c.instanceId !== selectedId));
-      setSelectedId(null);
+      removeClip(selectedId);
     }
   });
   useEffect(() => {
@@ -1250,9 +1264,26 @@ function ArrangeEditor({
   const selected = selectedId
     ? (clips.find((c) => c.instanceId === selectedId) ?? null)
     : null;
-  const currentTrack = selected
-    ? (trackById.get(selected.trackId) ?? null)
-    : null;
+
+  // Keep the selected row, and while playing the row under the playhead, in view.
+  useEffect(() => {
+    if (selectedId) scrollRowIntoView(sequenceRef.current, selectedId);
+  }, [selectedId]);
+  useEffect(() => {
+    if (playing && headClipId) {
+      scrollRowIntoView(sequenceRef.current, headClipId);
+    }
+  }, [playing, headClipId]);
+
+  function removeClip(id: string) {
+    setClips((prev) => prev.filter((c) => c.instanceId !== id));
+    setSelectedId((cur) => (cur === id ? null : cur));
+  }
+
+  function changeInspectorOpen(open: boolean) {
+    setInspectorOpen(open);
+    writeStored(INSPECTOR_OPEN_KEY, open ? "1" : "0");
+  }
 
   function addTrack(trackId: string, atIndex?: number) {
     const item = newClipForTrack(trackById.get(trackId));
@@ -1318,6 +1349,7 @@ function ArrangeEditor({
   }
 
   function selectClip(id: string) {
+    if (id !== selectedId) changeInspectorOpen(true);
     setSelectedId(id);
     const clip = clipsRef.current.find((c) => c.instanceId === id);
     if (!clip) return;
@@ -1526,112 +1558,99 @@ function ArrangeEditor({
     );
   }
 
+  const indexById = new Map(clips.map((c, i) => [c.instanceId, i]));
+  const maxClipDur = clips.reduce((m, c) => Math.max(m, clipDuration(c)), 0);
+  const contextId = playing ? headClipId : (selectedId ?? headClipId);
+  const contextIndex = contextId != null ? indexById.get(contextId) : undefined;
+  const contextClip = contextIndex != null ? clips[contextIndex] : undefined;
+  const contextTrack = contextClip
+    ? trackById.get(contextClip.trackId)
+    : undefined;
+
   return (
     <div className="arr-panel" ref={panelRef}>
-      <div className="arr-toolbar">
+      <div className="arr-identity">
         <button type="button" className="filterButton" onClick={onBack}>
           ← arrangements
         </button>
-        <input
-          className="arr-name-input"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          aria-label="Arrangement name"
-          readOnly={!isOwner}
-          disabled={!isOwner}
-        />
-        {!isOwner && (
-          <span className="arr-muted">by {arrangement.userEmail}</span>
+        {isOwner ? (
+          <input
+            className="arr-name-input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            aria-label="Arrangement name"
+          />
+        ) : (
+          <span className="arr-name-ro" title={name}>
+            {name}
+          </span>
         )}
         {!isOwner && (
-          <button
-            type="button"
-            className="filterButton"
-            disabled={copying}
-            onClick={() => void onCopyHere()}
+          <span className="arr-muted arr-owner">by {arrangement.userEmail}</span>
+        )}
+        <span className="arr-spacer" />
+        {isOwner ? (
+          <span
+            className={[
+              "arr-save",
+              saveState === "error" ? "save-error" : "",
+              saveState === "saved" ? "save-ok" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            aria-live="polite"
           >
-            {copying ? "copying…" : "copy to mine"}
-          </button>
+            {saveState === "saving"
+              ? "saving…"
+              : saveState === "saved"
+                ? "saved"
+                : saveState === "error"
+                  ? "save failed"
+                  : ""}
+          </span>
+        ) : (
+          <>
+            <span className="arr-readonly-tag">read-only</span>
+            <button
+              type="button"
+              className="filterButton arr-cta"
+              disabled={copying}
+              title="Make your own editable copy of this arrangement"
+              onClick={() => void onCopyHere()}
+            >
+              {copying ? "copying…" : "copy to edit"}
+            </button>
+          </>
         )}
+      </div>
+
+      <div className="arr-transport">
         <button
           type="button"
-          className="filterButton"
-          disabled={clips.length === 0}
-          title="Check this arrangement's tracks in the library (replaces current checks)"
-          onClick={() =>
-            onCheckTracks([...new Set(clips.map((c) => c.trackId))])
+          className={
+            playing ? "filterButton filterSelected arr-play" : "filterButton arr-play"
           }
-        >
-          check tracks
-        </button>
-        <button
-          type="button"
-          className="filterButton"
+          disabled={clips.length === 0}
+          title="Play the arrangement from the playhead (space)"
           onClick={() => toggleArrangementPlay()}
         >
-          {playing ? "stop" : "play"}
+          {playing ? "■ stop" : "▶ play"}
         </button>
-        <span className="arr-mode-toggle" role="group" aria-label="Playback mode">
-          {PLAYBACK_MODES.map((m) => (
-            <button
-              key={m}
-              type="button"
-              className={
-                playbackMode === m
-                  ? "filterButton filterSelected"
-                  : "filterButton"
-              }
-              aria-pressed={playbackMode === m}
-              title={
-                m === "stream"
-                  ? "Stream audio (light; transitions within ~50 ms)"
-                  : "Decode current and next clip (gapless; waits to load)"
-              }
-              onClick={() => changePlaybackMode(m)}
-            >
-              {m}
-            </button>
-          ))}
+        <span className="arr-clock">
+          <PlayheadClock store={playhead} />
+          <span className="arr-clock-total"> / {formatClock(totalSec)}</span>
         </span>
-        {playing && audioWaiting && (
-          <span className="arr-muted">loading…</span>
+        {contextClip && contextIndex != null && (
+          <span
+            className="arr-context"
+            title={contextTrack?.filename ?? contextClip.trackId}
+          >
+            clip {contextIndex + 1} of {clips.length} ·{" "}
+            {contextTrack ? shortTitle(contextTrack.filename) : "?"}
+          </span>
         )}
-        <button
-          type="button"
-          className="filterButton"
-          disabled={clips.length === 0}
-          title="Download TSV cut list (filename, in, out, pause, gain)"
-          onClick={() => {
-            const body = buildArrangementTsv(clips, trackById);
-            downloadTextFile(
-              `${sanitizeDownloadName(name)}.tsv`,
-              body,
-              "text/tab-separated-values;charset=utf-8",
-            );
-          }}
-        >
-          export
-        </button>
-        <button
-          type="button"
-          className="filterButton"
-          onClick={() => setPxPerSec((p) => Math.max(PX_PER_SEC_MIN, p / 1.25))}
-          title="Zoom out sequence"
-        >
-          −
-        </button>
-        <button
-          type="button"
-          className="filterButton"
-          onClick={() => setPxPerSec((p) => Math.min(PX_PER_SEC_MAX, p * 1.25))}
-          title="Zoom in sequence"
-        >
-          +
-        </button>
-        <span className="arr-muted">
-          ▶ <PlayheadClock store={playhead} /> / {formatClock(totalSec)} ·{" "}
-          {clips.length} clips · {formatPxPerSec(pxPerSec)} px/s
-        </span>
+        {playing && audioWaiting && <span className="arr-muted">loading…</span>}
+        <span className="arr-spacer" />
         {releasedClips.length > 0 && (
           <span
             className="arr-released-warn"
@@ -1646,50 +1665,143 @@ function ArrangeEditor({
           </span>
         )}
         {skippedCount > 0 && (
+          <span
+            className="arr-skip-chip"
+            title="Skipped clips are left out of playback in this session only"
+          >
+            {skippedCount} skipped (not saved)
+            <button
+              type="button"
+              className="arr-chip-btn"
+              onClick={() => setSkipped(new Set())}
+            >
+              clear
+            </button>
+          </span>
+        )}
+        <span className="arr-zoom" role="group" aria-label="Overview zoom">
           <button
             type="button"
             className="filterButton"
-            title="Play all clips again"
-            onClick={() => setSkipped(new Set())}
+            disabled={overviewZoom <= 1}
+            title="Zoom out overview"
+            onClick={() => setOverviewZoom((z) => Math.max(1, z / 2))}
           >
-            unskip {skippedCount}
+            −
           </button>
-        )}
-        <span className="arr-clip-times" aria-live="polite">
-          {selected
-            ? `in ${formatClock(selected.inSec)} – out ${formatClock(selected.outSec)} · ${formatClock(clipDuration(selected))} · pause ${formatClock(selected.pauseSec)} · ×${selected.gain.toFixed(2)}`
-            : "no clip selected"}
-        </span>
-        {isOwner ? (
-          <span
-            className={[
-              "arr-save",
-              saveState === "error" ? "save-error" : "",
-              saveState === "saved" ? "save-ok" : "",
-            ]
-              .filter(Boolean)
-              .join(" ")}
+          <button
+            type="button"
+            className="filterButton"
+            disabled={overviewZoom >= OVERVIEW_ZOOM_MAX}
+            title="Zoom in overview"
+            onClick={() =>
+              setOverviewZoom((z) => Math.min(OVERVIEW_ZOOM_MAX, z * 2))
+            }
           >
-            {saveState === "saving"
-              ? "saving…"
-              : saveState === "saved"
-                ? "saved"
-                : saveState === "error"
-                  ? "save failed"
-                  : ""}
-          </span>
-        ) : (
-          <span className="arr-save">read-only</span>
-        )}
-        <span className="arr-hint">
-          {isOwner
-            ? "drag tracks → sequence · reorder rows · select to trim · space play · del remove"
-            : "space play · copy to edit"}
+            +
+          </button>
         </span>
+        <Menu
+          label="⋯"
+          title="Export, check tracks, playback mode, shortcuts"
+          buttonClassName="filterButton"
+        >
+          {(close) => (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                className="arr-menu-item"
+                disabled={clips.length === 0}
+                onClick={() => {
+                  close();
+                  const body = buildArrangementTsv(clips, trackById);
+                  downloadTextFile(
+                    `${sanitizeDownloadName(name)}.tsv`,
+                    body,
+                    "text/tab-separated-values;charset=utf-8",
+                  );
+                }}
+              >
+                Export TSV
+                <span className="arr-menu-hint">
+                  filename, in, out, pause, gain
+                </span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="arr-menu-item"
+                disabled={clips.length === 0}
+                onClick={() => {
+                  close();
+                  onCheckTracks([...new Set(clips.map((c) => c.trackId))]);
+                }}
+              >
+                Check tracks in library
+                <span className="arr-menu-hint">replaces current checks</span>
+              </button>
+              <div className="arr-menu-sep" role="separator" />
+              <div className="arr-menu-heading">Playback</div>
+              {PLAYBACK_MODES.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={playbackMode === m}
+                  className="arr-menu-item"
+                  onClick={() => {
+                    close();
+                    changePlaybackMode(m);
+                  }}
+                >
+                  <span className="arr-menu-check" aria-hidden>
+                    {playbackMode === m ? "●" : ""}
+                  </span>
+                  {PLAYBACK_MODE_LABEL[m].name}
+                  <span className="arr-menu-hint">
+                    {PLAYBACK_MODE_LABEL[m].hint}
+                  </span>
+                </button>
+              ))}
+              <div className="arr-menu-sep" role="separator" />
+              <div className="arr-menu-heading">Shortcuts</div>
+              <dl className="arr-menu-keys">
+                <dt>space</dt>
+                <dd>play / stop arrangement</dd>
+                {isOwner && (
+                  <>
+                    <dt>del</dt>
+                    <dd>remove selected clip</dd>
+                    <dt>drag</dt>
+                    <dd>tracks from the library, or rows to reorder</dd>
+                    <dt>double-click</dt>
+                    <dd>library track to append it</dd>
+                  </>
+                )}
+              </dl>
+            </>
+          )}
+        </Menu>
       </div>
+
+      <Overview
+        segs={segs}
+        totalSec={totalSec}
+        trackById={trackById}
+        indexById={indexById}
+        selectedId={selectedId}
+        headClipId={headClipId}
+        playing={playing}
+        zoom={overviewZoom}
+        store={playhead}
+        onSeek={seekToArrangement}
+        onSelect={selectClip}
+      />
 
       <div className="arr-main">
         <div
+          ref={sequenceRef}
           className={
             isOwner
               ? "arr-sequence-wrap"
@@ -1739,20 +1851,18 @@ function ArrangeEditor({
             >
               {clips.map((clip, index) => {
                 const track = trackById.get(clip.trackId);
-                const isSelected = clip.instanceId === selectedId;
                 const isSkipped = skippedIds.has(clip.instanceId);
                 const releasedOn = track?.releasedOn ?? null;
                 const dur = clipDuration(clip);
-                const waveW = Math.max(48, dur * pxPerSec);
-                const pauseW =
-                  clip.pauseSec > 0
-                    ? Math.max(12, clip.pauseSec * pxPerSec)
-                    : 0;
-                const audioSeg = segs.find(
-                  (s) =>
-                    s.kind === "audio" &&
-                    s.clip.instanceId === clip.instanceId,
-                );
+                const soloing = playing && soloClipId === clip.instanceId;
+                const title = track ? shortTitle(track.filename) : "?";
+                const tooltip = [
+                  track?.filename ?? `missing track ${clip.trackId}`,
+                  releasedOn ? `released on ${releasedOn}` : "",
+                  isSkipped ? "skipped in playback (not saved)" : "",
+                ]
+                  .filter(Boolean)
+                  .join("\n");
 
                 return (
                   <div
@@ -1768,11 +1878,16 @@ function ArrangeEditor({
                   >
                     <div className={dropSlotClass(index)} />
                     <div
+                      data-clip-id={clip.instanceId}
                       className={[
                         "arr-row",
-                        isSelected ? "arr-row-selected" : "",
+                        clip.instanceId === selectedId ? "arr-row-selected" : "",
                         isSkipped ? "arr-row-skipped" : "",
                         releasedOn ? "arr-row-released" : "",
+                        playing && headClipId === clip.instanceId
+                          ? "arr-row-playing"
+                          : "",
+                        soloing ? "arr-row-soloing" : "",
                         dragClipId === clip.instanceId
                           ? "arr-row-dragging"
                           : "",
@@ -1782,32 +1897,22 @@ function ArrangeEditor({
                       onClick={() => selectClip(clip.instanceId)}
                       onMouseEnter={() => onHoverTrack(clip.trackId)}
                     >
-                      <div className="arr-row-meta">
+                      {isOwner && (
                         <span
                           className="arr-row-handle"
                           title="Drag to reorder"
-                          draggable={isOwner}
+                          draggable
                           onDragStart={(e) => {
-                            if (!isOwner) {
-                              e.preventDefault();
-                              return;
-                            }
-                            e.dataTransfer.setData(
-                              CLIP_MIME,
-                              clip.instanceId,
-                            );
+                            e.dataTransfer.setData(CLIP_MIME, clip.instanceId);
                             e.dataTransfer.setData(
                               "text/clip-id",
                               clip.instanceId,
                             );
                             e.dataTransfer.effectAllowed = "move";
                             setDragClipId(clip.instanceId);
-                            const label = track
-                              ? shortTitle(track.filename)
-                              : "clip";
                             const ghost = document.createElement("div");
                             ghost.className = "arr-drag-ghost";
-                            ghost.textContent = `${index + 1}. ${label}`;
+                            ghost.textContent = `${index + 1}. ${title}`;
                             document.body.appendChild(ghost);
                             e.dataTransfer.setDragImage(ghost, 16, 16);
                             window.setTimeout(() => ghost.remove(), 0);
@@ -1816,167 +1921,93 @@ function ArrangeEditor({
                         >
                           ⠿
                         </span>
-                        <span className="arr-row-index">{index + 1}</span>
-                        <label
-                          className="arr-row-skip"
-                          title={
-                            isSkipped
-                              ? "Skipped: playback leaves this clip out (not saved)"
-                              : "Skip this clip in playback (not saved)"
-                          }
-                          onClick={(e) => e.stopPropagation()}
+                      )}
+                      <span className="arr-row-index">{index + 1}</span>
+                      <span className="arr-row-name" title={tooltip}>
+                        {title}
+                      </span>
+                      {clip.pauseSec > 0 && (
+                        <span
+                          className="arr-row-pause-cue"
+                          title={`${formatPause(clip.pauseSec)} pause after this clip`}
                         >
-                          <input
-                            type="checkbox"
-                            className="track-check"
-                            checked={isSkipped}
-                            onChange={() => toggleSkip(clip.instanceId)}
-                          />
-                          skip
-                        </label>
+                          +{formatPause(clip.pauseSec)}
+                        </span>
+                      )}
+                      <span className="arr-row-len" aria-hidden>
+                        <span
+                          style={{
+                            width: `${maxClipDur > 0 ? (dur / maxClipDur) * 100 : 0}%`,
+                          }}
+                        />
+                      </span>
+                      <span className="arr-row-dur">{formatClock(dur)}</span>
+                      <button
+                        type="button"
+                        className={
+                          isSkipped
+                            ? "arr-row-skip arr-row-skip-on"
+                            : "arr-row-skip"
+                        }
+                        aria-pressed={isSkipped}
+                        title={
+                          isSkipped
+                            ? "Skipped: left out of playback (this session only, not saved). Click to play it again."
+                            : "Skip in playback (this session only, not saved)"
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleSkip(clip.instanceId);
+                        }}
+                      >
+                        skip
+                      </button>
+                      <span className="arr-row-actions">
                         <button
                           type="button"
                           disabled={isSkipped}
                           className={
-                            playing && soloClipId === clip.instanceId
-                              ? "filterButton filterSelected arr-row-play"
-                              : "filterButton arr-row-play"
+                            soloing
+                              ? "arr-row-btn arr-row-btn-on"
+                              : "arr-row-btn"
                           }
                           title={
                             isSkipped
                               ? "Skipped clips don't play"
-                              : "Play this clip from selection start"
+                              : soloing
+                                ? "Stop"
+                                : "Play this clip"
                           }
+                          aria-label={soloing ? "Stop clip" : "Play clip"}
                           onClick={(e) => {
                             e.stopPropagation();
                             playClipSelection(clip);
                           }}
                         >
-                          {playing && soloClipId === clip.instanceId
-                            ? "stop"
-                            : "play"}
+                          {soloing ? "■" : "▶"}
                         </button>
                         {isOwner && (
-                          <button
-                            type="button"
-                            className="filterButton arr-row-remove"
-                            title="Remove clip"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setClips((prev) =>
-                                prev.filter(
-                                  (c) => c.instanceId !== clip.instanceId,
-                                ),
-                              );
-                              if (selectedId === clip.instanceId) {
-                                setSelectedId(null);
-                              }
-                            }}
+                          <Menu
+                            label="⋯"
+                            title="Clip actions"
+                            buttonClassName="arr-row-btn"
                           >
-                            ×
-                          </button>
+                            {(close) => (
+                              <button
+                                type="button"
+                                role="menuitem"
+                                className="arr-menu-item arr-menu-danger"
+                                onClick={() => {
+                                  close();
+                                  removeClip(clip.instanceId);
+                                }}
+                              >
+                                Remove from arrangement
+                              </button>
+                            )}
+                          </Menu>
                         )}
-                        <span
-                          className="arr-row-name"
-                          title={track?.filename ?? clip.trackId}
-                        >
-                          {track ? shortTitle(track.filename) : "?"}
-                        </span>
-                        {releasedOn && (
-                          <span
-                            className="arr-row-released-badge"
-                            title={`Already released on ${releasedOn}`}
-                          >
-                            released: {releasedOn}
-                          </span>
-                        )}
-                        <label className="arr-row-field">
-                          pause
-                          <input
-                            type="number"
-                            min={0}
-                            step={0.5}
-                            disabled={!isOwner}
-                            value={clip.pauseSec}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) =>
-                              updateClip(clip.instanceId, {
-                                pauseSec: Number(e.target.value) || 0,
-                              })
-                            }
-                          />
-                        </label>
-                        <label className="arr-row-field">
-                          gain
-                          <input
-                            type="range"
-                            min={0}
-                            max={2}
-                            step={0.05}
-                            disabled={!isOwner}
-                            value={clip.gain}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) =>
-                              updateClip(clip.instanceId, {
-                                gain: Number(e.target.value),
-                              })
-                            }
-                          />
-                          <span className="arr-row-gain-val">
-                            ×{clip.gain.toFixed(2)}
-                          </span>
-                        </label>
-                      </div>
-                      <div
-                        className="arr-row-wave-wrap"
-                        style={{ width: waveW + pauseW }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          selectClip(clip.instanceId);
-                          if (!audioSeg) return;
-                          const rect =
-                            e.currentTarget.getBoundingClientRect();
-                          const x = e.clientX - rect.left;
-                          if (x <= waveW) {
-                            seekToArrangement(
-                              audioSeg.arrStart + x / pxPerSec,
-                            );
-                          } else if (clip.pauseSec > 0) {
-                            seekToArrangement(
-                              audioSeg.arrEnd + (x - waveW) / pxPerSec,
-                            );
-                          }
-                        }}
-                      >
-                        <div
-                          className="arr-row-wave"
-                          style={{ width: waveW, height: ROW_WAVE_H }}
-                        >
-                          <ClipWaveform
-                            trackId={clip.trackId}
-                            offsetSec={clip.inSec}
-                            durationSec={dur}
-                            width={waveW}
-                            height={ROW_WAVE_H}
-                            peaksVersion={peaksVersion}
-                          />
-                          {audioSeg && (
-                            <RowPlayhead
-                              store={playhead}
-                              arrStart={audioSeg.arrStart}
-                              arrEnd={audioSeg.arrEnd}
-                              pxPerSec={pxPerSec}
-                            />
-                          )}
-                        </div>
-                        {pauseW > 0 && (
-                          <div
-                            className="arr-row-pause"
-                            style={{ width: pauseW, height: ROW_WAVE_H }}
-                            title={`pause ${formatClock(clip.pauseSec)}`}
-                          />
-                        )}
-                      </div>
+                      </span>
                     </div>
                   </div>
                 );
@@ -1995,44 +2026,695 @@ function ArrangeEditor({
           )}
         </div>
 
-        <ClipEditorPanel
+        <ClipInspector
           clip={selected}
+          index={selected ? (indexById.get(selected.instanceId) ?? 0) : 0}
           track={selected ? (trackById.get(selected.trackId) ?? null) : null}
           isOwner={isOwner}
-          peaksVersion={peaksVersion}
-          editorPxPerSec={editorPxPerSec}
-          onZoom={(fn) => setEditorPxPerSec(fn)}
+          open={inspectorOpen}
+          onOpenChange={changeInspectorOpen}
+          skipped={selected ? skippedIds.has(selected.instanceId) : false}
+          soloing={
+            selected != null && playing && soloClipId === selected.instanceId
+          }
+          onPlay={() => {
+            if (selected) playClipSelection(selected);
+          }}
+          onToggleSkip={() => {
+            if (selected) toggleSkip(selected.instanceId);
+          }}
+          onRemove={() => {
+            if (selected) removeClip(selected.instanceId);
+          }}
           onChange={(patch) => {
             if (selected) updateClip(selected.instanceId, patch);
           }}
+          peaksVersion={peaksVersion}
+          editorPxPerSec={editorPxPerSec}
+          onZoom={(fn) => setEditorPxPerSec(fn)}
         />
-
-        <ClipCommentsPanel track={currentTrack} />
       </div>
     </div>
   );
 }
 
-function ClipEditorPanel({
+/** Scroll `wrap` just enough to show the sequence row for `id`. */
+function scrollRowIntoView(wrap: HTMLElement | null, id: string) {
+  const row = wrap?.querySelector<HTMLElement>(`[data-clip-id="${id}"]`);
+  if (!wrap || !row) return;
+  const w = wrap.getBoundingClientRect();
+  const r = row.getBoundingClientRect();
+  const margin = 8;
+  if (r.top < w.top + margin) {
+    wrap.scrollTop += r.top - w.top - margin;
+  } else if (r.bottom > w.bottom - margin) {
+    wrap.scrollTop += r.bottom - w.bottom + margin;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Menu — button with a popover; used for transport and row overflow.
+// ---------------------------------------------------------------------------
+
+const MENU_EST_H = 280;
+
+function Menu({
+  label,
+  title,
+  buttonClassName,
+  children,
+}: {
+  label: ReactNode;
+  title: string;
+  buttonClassName: string;
+  children: (close: () => void) => ReactNode;
+}) {
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  /** Fixed position of the open popover, from the button's rect. */
+  const [pos, setPos] = useState<{
+    top?: number;
+    bottom?: number;
+    right: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!pos) return;
+    const close = () => setPos(null);
+    const inside = (t: EventTarget | null) =>
+      t instanceof Node &&
+      (popRef.current?.contains(t) || btnRef.current?.contains(t));
+    const onDown = (e: PointerEvent) => {
+      if (!inside(e.target)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      close();
+      btnRef.current?.focus();
+    };
+    const onScroll = (e: Event) => {
+      if (!inside(e.target)) close();
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [pos]);
+
+  function toggle() {
+    if (pos) {
+      setPos(null);
+      return;
+    }
+    const r = btnRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const right = Math.max(4, window.innerWidth - r.right);
+    const below = window.innerHeight - r.bottom;
+    setPos(
+      below < MENU_EST_H && r.top > below
+        ? { bottom: window.innerHeight - r.top + 2, right }
+        : { top: r.bottom + 2, right },
+    );
+  }
+
+  return (
+    <span
+      className="arr-menu"
+      data-open={pos ? "" : undefined}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        ref={btnRef}
+        type="button"
+        className={pos ? `${buttonClassName} arr-menu-btn-open` : buttonClassName}
+        title={title}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={pos != null}
+        onClick={toggle}
+      >
+        {label}
+      </button>
+      {pos && (
+        <div
+          ref={popRef}
+          className="arr-menu-pop"
+          role="menu"
+          style={{ top: pos.top, bottom: pos.bottom, right: pos.right }}
+        >
+          {children(() => setPos(null))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Overview — the whole arrangement as one strip: seek, select, playhead.
+// ---------------------------------------------------------------------------
+
+function Overview({
+  segs,
+  totalSec,
+  trackById,
+  indexById,
+  selectedId,
+  headClipId,
+  playing,
+  zoom,
+  store,
+  onSeek,
+  onSelect,
+}: {
+  segs: ScheduleSeg[];
+  totalSec: number;
+  trackById: Map<string, Track>;
+  indexById: Map<string, number>;
+  selectedId: string | null;
+  headClipId: string | null;
+  playing: boolean;
+  zoom: number;
+  store: PlayheadStore;
+  onSeek: (sec: number) => void;
+  onSelect: (instanceId: string) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  /** Pointer position while scrubbing during playback; seeks on release. */
+  const [scrub, setScrub] = useState<number | null>(null);
+  const empty = segs.length === 0;
+  const pct = (sec: number) => `${(sec / totalSec) * 100}%`;
+
+  function secAt(clientX: number) {
+    const el = trackRef.current;
+    if (!el) return 0;
+    const r = el.getBoundingClientRect();
+    const frac = r.width > 0 ? (clientX - r.left) / r.width : 0;
+    return Math.max(0, Math.min(totalSec, frac * totalSec));
+  }
+
+  function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (empty || e.button !== 0) return;
+    e.preventDefault();
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    // While playing, every seek reloads audio: preview the drag, seek once.
+    const deferred = playing;
+    let at = secAt(e.clientX);
+    const seg = segAt(segs, at);
+    if (seg) onSelect(seg.clip.instanceId);
+    if (deferred) setScrub(at);
+    else onSeek(at);
+
+    const onMove = (ev: PointerEvent) => {
+      at = secAt(ev.clientX);
+      if (deferred) setScrub(at);
+      else onSeek(at);
+    };
+    const onUp = (ev: PointerEvent) => {
+      el.releasePointerCapture(ev.pointerId);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+      if (deferred) {
+        setScrub(null);
+        if (ev.type === "pointerup") onSeek(at);
+      }
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+  }
+
+  return (
+    <div className="arr-overview">
+      <div className="arr-overview-scroll" ref={scrollRef}>
+        <div
+          ref={trackRef}
+          className="arr-overview-track"
+          style={{ width: `${zoom * 100}%` }}
+          onPointerDown={onPointerDown}
+          title={empty ? undefined : "Click or drag to seek"}
+        >
+          {empty && (
+            <span className="arr-overview-empty">nothing to play</span>
+          )}
+          {segs.map((s) => {
+            const id = s.clip.instanceId;
+            const style = {
+              left: pct(s.arrStart),
+              width: pct(s.arrEnd - s.arrStart),
+            };
+            if (s.kind === "pause") {
+              return (
+                <div
+                  key={`${id}-pause`}
+                  className="arr-ov-pause"
+                  style={style}
+                  title={`pause ${formatPause(s.arrEnd - s.arrStart)}`}
+                />
+              );
+            }
+            const track = trackById.get(s.clip.trackId);
+            const index = indexById.get(id) ?? 0;
+            return (
+              <div
+                key={id}
+                className={[
+                  "arr-ov-clip",
+                  id === selectedId ? "arr-ov-selected" : "",
+                  playing && id === headClipId ? "arr-ov-playing" : "",
+                  track?.releasedOn ? "arr-ov-released" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                style={style}
+                title={`${index + 1}. ${track ? shortTitle(track.filename) : "?"} · ${formatClock(s.arrEnd - s.arrStart)}`}
+              >
+                <span className="arr-ov-label">{index + 1}</span>
+              </div>
+            );
+          })}
+          {!empty && (
+            <OverviewPlayhead
+              store={store}
+              totalSec={totalSec}
+              scrollRef={scrollRef}
+              follow={playing && zoom > 1}
+            />
+          )}
+          {scrub != null && (
+            <div className="arr-ov-scrub" style={{ left: pct(scrub) }} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OverviewPlayhead({
+  store,
+  totalSec,
+  scrollRef,
+  follow,
+}: {
+  store: PlayheadStore;
+  totalSec: number;
+  scrollRef: RefObject<HTMLDivElement | null>;
+  /** Keep the playhead inside the scrolled (zoomed) strip. */
+  follow: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const frac = usePlayhead(
+    store,
+    (sec) => Math.round(Math.min(1, sec / totalSec) * 4000) / 4000,
+  );
+
+  useEffect(() => {
+    const sc = scrollRef.current;
+    const el = ref.current;
+    if (!follow || !sc || !el) return;
+    const x = el.offsetLeft;
+    if (x < sc.scrollLeft || x > sc.scrollLeft + sc.clientWidth - 16) {
+      sc.scrollLeft = x - sc.clientWidth * 0.2;
+    }
+  }, [frac, follow, scrollRef]);
+
+  return (
+    <div ref={ref} className="arr-ov-playhead" style={{ left: `${frac * 100}%` }} />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ClipInspector — the selected clip: every control in one toolbar, with the
+// trim waveform or the track's comments below (wave / comments toggle).
+// ---------------------------------------------------------------------------
+
+type ClipPatch = Partial<
+  Pick<ArrangementClip, "inSec" | "outSec" | "pauseSec" | "gain">
+>;
+
+/** Inspector height in the comments view before the wave view was measured. */
+const DEFAULT_INSPECTOR_H = 176;
+
+/** Waveform scale for the trim editor, capped so huge tracks stay drawable. */
+function trimScale(
+  clip: ArrangementClip,
+  track: Track,
+  editorPxPerSec: number,
+) {
+  const srcDur = sourceDuration(track, getCachedPeaks(clip.trackId) ?? null);
+  const maxPx = Math.min(
+    PX_PER_SEC_MAX,
+    MAX_EDITOR_CSS_PX / Math.max(srcDur, MIN_CLIP_SEC),
+  );
+  const effectivePx = Math.min(editorPxPerSec, Math.max(PX_PER_SEC_MIN, maxPx));
+  return { srcDur, maxPx, effectivePx };
+}
+
+function ClipInspector({
   clip,
+  index,
   track,
   isOwner,
+  open,
+  onOpenChange,
+  skipped,
+  soloing,
+  onPlay,
+  onToggleSkip,
+  onRemove,
+  onChange,
   peaksVersion,
   editorPxPerSec,
   onZoom,
-  onChange,
 }: {
   clip: ArrangementClip | null;
+  index: number;
   track: Track | null;
   isOwner: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  skipped: boolean;
+  soloing: boolean;
+  onPlay: () => void;
+  onToggleSkip: () => void;
+  onRemove: () => void;
+  onChange: (patch: ClipPatch) => void;
   peaksVersion: number;
   editorPxPerSec: number;
   onZoom: (fn: (p: number) => number) => void;
-  onChange: (
-    patch: Partial<Pick<ArrangementClip, "inSec" | "outSec">>,
-  ) => void;
 }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState<InspectorView>(readInspectorView);
+  const sectionRef = useRef<HTMLElement>(null);
+  /**
+   * Inspector height in the wave view. The comments view reuses it, so
+   * toggling never resizes the panel (and the sequence above it).
+   */
+  const [waveHeight, setWaveHeight] = useState<number | null>(null);
+  const hasClip = clip != null;
+  const measureWave = open && view === "wave" && hasClip;
+  useLayoutEffect(() => {
+    const el = sectionRef.current;
+    if (!el || !measureWave) return;
+    const ro = new ResizeObserver(() => setWaveHeight(el.offsetHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measureWave]);
+
+  function showView(next: InspectorView) {
+    setView(next);
+    writeStored(INSPECTOR_VIEW_KEY, next);
+    if (!open) onOpenChange(true);
+  }
+
+  if (!clip) {
+    return (
+      <section
+        className="arr-inspector arr-inspector-closed"
+        aria-label="Clip inspector"
+      >
+        <div className="arr-inspector-bar">
+          <span className="arr-muted">Select a clip to trim and edit.</span>
+        </div>
+      </section>
+    );
+  }
+
+  const scale = track ? trimScale(clip, track, editorPxPerSec) : null;
+  const showBody = open;
+  const commentCount = track?.comments.length ?? 0;
+  const commentsView = open && view === "comments";
+
+  return (
+    <section
+      ref={sectionRef}
+      className={showBody ? "arr-inspector" : "arr-inspector arr-inspector-closed"}
+      style={
+        commentsView ? { height: waveHeight ?? DEFAULT_INSPECTOR_H } : undefined
+      }
+      aria-label="Clip inspector"
+    >
+      <div className="arr-inspector-bar">
+        <button
+          type="button"
+          className="arr-inspector-toggle"
+          aria-expanded={open}
+          title={open ? "Collapse to the toolbar" : "Expand"}
+          onClick={() => onOpenChange(!open)}
+        >
+          {open ? "▾" : "▸"}
+        </button>
+        <span className="arr-view-toggle" role="group" aria-label="Show">
+          <button
+            type="button"
+            className={
+              open && view === "wave"
+                ? "filterButton filterSelected"
+                : "filterButton"
+            }
+            aria-pressed={open && view === "wave"}
+            title="Show the trim waveform"
+            onClick={() => showView("wave")}
+          >
+            wave
+          </button>
+          <button
+            type="button"
+            className={
+              open && view === "comments"
+                ? "filterButton filterSelected"
+                : "filterButton"
+            }
+            aria-pressed={open && view === "comments"}
+            title="Show this track's comments (edit them in the library list)"
+            onClick={() => showView("comments")}
+          >
+            comments{commentCount > 0 ? ` (${commentCount})` : ""}
+          </button>
+        </span>
+        <span
+          className="arr-inspector-title"
+          title={track?.filename ?? clip.trackId}
+        >
+          {index + 1}. {track ? shortTitle(track.filename) : "missing track"}
+        </span>
+        {!commentsView && (
+          <>
+            <button
+              type="button"
+              disabled={skipped}
+              className={soloing ? "arr-row-btn arr-row-btn-on" : "arr-row-btn"}
+              title={
+                skipped
+                  ? "Skipped clips don't play"
+                  : soloing
+                    ? "Stop"
+                    : "Play this clip"
+              }
+              aria-label={soloing ? "Stop clip" : "Play clip"}
+              onClick={onPlay}
+            >
+              {soloing ? "■" : "▶"}
+            </button>
+
+            <span className="arr-insp-group">
+              {isOwner ? (
+                <>
+                  <label className="arr-field-inline">
+                    in
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.1}
+                      value={Number(clip.inSec.toFixed(2))}
+                      onChange={(e) =>
+                        onChange({ inSec: Number(e.target.value) || 0 })
+                      }
+                    />
+                  </label>
+                  <label className="arr-field-inline">
+                    out
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.1}
+                      value={Number(clip.outSec.toFixed(2))}
+                      onChange={(e) =>
+                        onChange({ outSec: Number(e.target.value) || 0 })
+                      }
+                    />
+                  </label>
+                </>
+              ) : (
+                <span className="arr-field-inline">
+                  in {formatClockTenths(clip.inSec)} · out{" "}
+                  {formatClockTenths(clip.outSec)}
+                </span>
+              )}
+              <span
+                className="arr-muted"
+                title="Selection length of full source length"
+              >
+                {formatClock(clipDuration(clip))}
+                {scale ? ` of ${formatClock(scale.srcDur)}` : ""}
+              </span>
+            </span>
+
+            <span className="arr-insp-group">
+              {isOwner ? (
+                <label className="arr-field-inline" title="Silence after this clip">
+                  pause
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={clip.pauseSec}
+                    onChange={(e) =>
+                      onChange({ pauseSec: Number(e.target.value) || 0 })
+                    }
+                  />
+                  s
+                </label>
+              ) : (
+                <span className="arr-field-inline">
+                  pause{" "}
+                  {clip.pauseSec > 0 ? formatPause(clip.pauseSec) : "none"}
+                </span>
+              )}
+              {isOwner ? (
+                <label className="arr-field-inline">
+                  gain
+                  <input
+                    type="range"
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    value={clip.gain}
+                    onChange={(e) => onChange({ gain: Number(e.target.value) })}
+                  />
+                  <span className="arr-gain-val">×{clip.gain.toFixed(2)}</span>
+                </label>
+              ) : (
+                <span className="arr-field-inline">
+                  gain ×{clip.gain.toFixed(2)}
+                </span>
+              )}
+            </span>
+
+            <span className="arr-insp-group">
+              <label
+                className="arr-field-inline arr-skip-field"
+                title="Leave this clip out of playback. This session only; not saved."
+              >
+                <input
+                  type="checkbox"
+                  className="track-check"
+                  checked={skipped}
+                  onChange={onToggleSkip}
+                />
+                skip <span className="arr-muted">(not saved)</span>
+              </label>
+              {track?.releasedOn && (
+                <span
+                  className="arr-released-warn"
+                  title={`Already released on ${track.releasedOn}`}
+                >
+                  released {track.releasedOn}
+                </span>
+              )}
+            </span>
+
+            <span className="arr-spacer" />
+
+
+            {scale && open && (
+              <span className="arr-insp-group">
+                <span className="arr-zoom" role="group" aria-label="Waveform zoom">
+                  <button
+                    type="button"
+                    className="filterButton"
+                    title="Zoom out waveform"
+                    onClick={() =>
+                      onZoom((p) => Math.max(PX_PER_SEC_MIN, p / 1.25))
+                    }
+                  >
+                    −
+                  </button>
+                  <button
+                    type="button"
+                    className="filterButton"
+                    title="Zoom in waveform"
+                    onClick={() => onZoom((p) => Math.min(scale.maxPx, p * 1.25))}
+                  >
+                    +
+                  </button>
+                </span>
+                <span className="arr-muted">
+                  {formatPxPerSec(scale.effectivePx)} px/s
+                </span>
+              </span>
+            )}
+
+            {isOwner && (
+              <button
+                type="button"
+                className="filterButton arr-danger-btn"
+                onClick={onRemove}
+              >
+                remove
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      {showBody && (
+        <div className="arr-inspector-body">
+          {view === "comments" ? (
+            <CommentsPanel track={track} />
+          ) : track && scale ? (
+            <TrimEditor
+              clip={clip}
+              isOwner={isOwner}
+              peaksVersion={peaksVersion}
+              srcDur={scale.srcDur}
+              pxPerSec={scale.effectivePx}
+              onChange={onChange}
+            />
+          ) : (
+            <p className="arr-inspector-empty arr-trim">
+              This track is missing from the library.
+            </p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function TrimEditor({
+  clip,
+  isOwner,
+  peaksVersion,
+  srcDur,
+  pxPerSec,
+  onChange,
+}: {
+  clip: ArrangementClip;
+  isOwner: boolean;
+  peaksVersion: number;
+  srcDur: number;
+  pxPerSec: number;
+  onChange: (patch: ClipPatch) => void;
+}) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const clipRef = useLatestRef(clip);
   const dragRef = useRef<{
@@ -2041,26 +2723,9 @@ function ClipEditorPanel({
     fixedLen?: number;
   } | null>(null);
 
-  if (!clip || !track) {
-    return (
-      <div className="arr-editor" aria-live="polite">
-        <div className="arr-editor-empty">
-          Select a clip to edit in/out points on the full waveform.
-        </div>
-      </div>
-    );
-  }
-
-  const peaks = getCachedPeaks(clip.trackId) ?? null;
-  const srcDur = sourceDuration(track, peaks);
-  const maxPx = Math.min(
-    PX_PER_SEC_MAX,
-    MAX_EDITOR_CSS_PX / Math.max(srcDur, MIN_CLIP_SEC),
-  );
-  const effectivePx = Math.min(editorPxPerSec, Math.max(PX_PER_SEC_MIN, maxPx));
-  const widthPx = Math.max(320, srcDur * effectivePx);
-  const inX = Math.round(clip.inSec * effectivePx);
-  const outX = Math.round(clip.outSec * effectivePx);
+  const widthPx = Math.max(320, srcDur * pxPerSec);
+  const inX = Math.round(clip.inSec * pxPerSec);
+  const outX = Math.round(clip.outSec * pxPerSec);
   const selW = Math.max(4, outX - inX);
 
   /** X in canvas content coordinates (matches selection `left` / waveform). */
@@ -2086,7 +2751,7 @@ function ClipEditorPanel({
     el.setPointerCapture(e.pointerId);
 
     const x = pointerCanvasX(e.clientX);
-    const at = x / effectivePx;
+    const at = x / pxPerSec;
 
     if (kind === "range") {
       dragRef.current = {
@@ -2104,23 +2769,17 @@ function ClipEditorPanel({
       const d = dragRef.current;
       const c = clipRef.current;
       if (!d || !c) return;
-      const atMove = pointerCanvasX(ev.clientX) / effectivePx;
+      const atMove = pointerCanvasX(ev.clientX) / pxPerSec;
 
       if (d.kind === "in") {
         const next = atMove - d.grabOffset;
         onChange({
-          inSec: Math.max(
-            0,
-            Math.min(next, c.outSec - MIN_CLIP_SEC),
-          ),
+          inSec: Math.max(0, Math.min(next, c.outSec - MIN_CLIP_SEC)),
         });
       } else if (d.kind === "out") {
         const next = atMove - d.grabOffset;
         onChange({
-          outSec: Math.max(
-            c.inSec + MIN_CLIP_SEC,
-            Math.min(next, srcDur),
-          ),
+          outSec: Math.max(c.inSec + MIN_CLIP_SEC, Math.min(next, srcDur)),
         });
       } else if (d.kind === "range" && d.fixedLen != null) {
         let nextIn = atMove - d.grabOffset;
@@ -2142,64 +2801,10 @@ function ClipEditorPanel({
   }
 
   return (
-    <div className="arr-editor">
-      <div className="arr-editor-header">
-        <span className="arr-editor-title">{shortTitle(track.filename)}</span>
-        <span className="arr-muted">
-          full {formatClock(srcDur)} · selection{" "}
-          {formatClock(clipDuration(clip))}
-        </span>
-        <label className="arr-row-field">
-          in
-          <input
-            type="number"
-            min={0}
-            step={0.1}
-            disabled={!isOwner}
-            value={Number(clip.inSec.toFixed(2))}
-            onChange={(e) =>
-              onChange({ inSec: Number(e.target.value) || 0 })
-            }
-          />
-        </label>
-        <label className="arr-row-field">
-          out
-          <input
-            type="number"
-            min={0}
-            step={0.1}
-            disabled={!isOwner}
-            value={Number(clip.outSec.toFixed(2))}
-            onChange={(e) =>
-              onChange({ outSec: Number(e.target.value) || 0 })
-            }
-          />
-        </label>
-        <button
-          type="button"
-          className="filterButton"
-          onClick={() =>
-            onZoom((p) => Math.max(PX_PER_SEC_MIN, p / 1.25))
-          }
-        >
-          −
-        </button>
-        <button
-          type="button"
-          className="filterButton"
-          onClick={() =>
-            onZoom((p) => Math.min(maxPx, p * 1.25))
-          }
-        >
-          +
-        </button>
-        <span className="arr-muted">
-          {formatPxPerSec(effectivePx)} px/s
-        </span>
-      </div>
-      <div className="arr-editor-scroll" ref={scrollRef}>
+    <div className="arr-trim">
+      <div className="arr-trim-scroll">
         <div
-          className="arr-editor-canvas"
+          className="arr-trim-canvas"
           ref={canvasRef}
           style={{ width: widthPx }}
         >
@@ -2210,26 +2815,29 @@ function ClipEditorPanel({
             width={widthPx}
             height={EDITOR_WAVE_H}
             peaksVersion={peaksVersion}
-            dimOutside
             sourceDurHint={srcDur}
           />
           <div
             className={
               isOwner
-                ? "arr-editor-selection"
-                : "arr-editor-selection arr-editor-selection-ro"
+                ? "arr-trim-selection"
+                : "arr-trim-selection arr-trim-selection-ro"
             }
             style={{ left: inX, width: selW, height: EDITOR_WAVE_H }}
             onPointerDown={(e) => onPointerDown(e, "range")}
           >
-            <div
-              className="arr-editor-handle left"
-              onPointerDown={(e) => onPointerDown(e, "in")}
-            />
-            <div
-              className="arr-editor-handle right"
-              onPointerDown={(e) => onPointerDown(e, "out")}
-            />
+            {isOwner && (
+              <>
+                <div
+                  className="arr-trim-handle left"
+                  onPointerDown={(e) => onPointerDown(e, "in")}
+                />
+                <div
+                  className="arr-trim-handle right"
+                  onPointerDown={(e) => onPointerDown(e, "out")}
+                />
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -2237,36 +2845,24 @@ function ClipEditorPanel({
   );
 }
 
-function ClipCommentsPanel({ track }: { track: Track | null }) {
-  if (!track) {
-    return (
-      <div className="arr-comments" aria-live="polite">
-        <div className="arr-comments-empty">
-          Select a clip to see its comments.
-        </div>
-      </div>
-    );
-  }
-
-  const comments = track.comments;
+/** Read-only comments for the selected track; editing stays in the library. */
+function CommentsPanel({ track }: { track: Track | null }) {
+  const comments = track?.comments ?? [];
   return (
-    <div className="arr-comments" aria-live="polite">
-      <div className="arr-comments-header">
-        <span className="arr-comments-title">{shortTitle(track.filename)}</span>
-        <span className="arr-muted">
-          {comments.length === 0
-            ? "no comments"
-            : `${comments.length} comment${comments.length === 1 ? "" : "s"}`}
-        </span>
-      </div>
+    <div className="arr-comments">
       {comments.length === 0 ? (
-        <div className="arr-comments-empty">No comments on this track.</div>
+        <p className="arr-comments-foot">
+          No comments — edit in the library list.
+        </p>
       ) : (
-        <ul className="arr-comments-list">
-          {comments.map((c) => (
-            <CommentRow key={c.id} comment={c} />
-          ))}
-        </ul>
+        <>
+          <ul className="arr-comments-list">
+            {comments.map((c) => (
+              <CommentRow key={c.id} comment={c} />
+            ))}
+          </ul>
+          <p className="arr-comments-foot">Edit comments in the library list.</p>
+        </>
       )}
     </div>
   );
