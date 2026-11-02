@@ -6,15 +6,15 @@ import {
   type CSSProperties,
   type FormEvent,
 } from "react";
-import {
-  api,
-  unifiedTags,
-  type Comment,
-  type Track,
-  type User,
-} from "./api";
+import { api, type Comment, type Tag, type Track, type User } from "./api";
 import { formatDuration, shortTitle } from "./format";
 import { TRACK_MIME } from "./mime";
+import {
+  TagFilterSelect,
+  TagNamesDatalist,
+  TrackTagChips,
+  type TrackTagActions,
+} from "./Tags";
 import {
   COMMENT_W_KEY,
   COMMENT_W_DEFAULT,
@@ -27,6 +27,7 @@ import {
   type AppMode,
   type FilterId,
   type PoolSort,
+  type SearchScope,
   type SortKey,
   usePersistedWidth,
 } from "./uiPersist";
@@ -35,15 +36,25 @@ const AUTOSAVE_MS = 500;
 
 export type TrackListFilters = {
   filter: FilterId;
+  /** Shared tag id. */
   tagFilter: string | null;
   hideReleased: boolean;
   showOthers: boolean;
   sort: PoolSort;
-  allTags: string[];
+  tags: Tag[];
+  /** Tracks per tag id (all tracks, unfiltered). */
+  tagCounts: ReadonlyMap<string, number>;
+  search: string;
+  searchScope: SearchScope;
+  /** Global "edit tags" toggle: removal × on row chips. */
+  tagEditing: boolean;
   visibleCount: number;
   visibleTotalSec: number;
   onFilter: (id: FilterId) => void;
-  onTagFilter: (tag: string | null) => void;
+  onTagFilter: (tagId: string | null) => void;
+  onSearch: (value: string) => void;
+  onSearchScope: (scope: SearchScope) => void;
+  onTagEditing: (value: boolean) => void;
   onHideReleased: (value: boolean) => void;
   onShowOthers: (value: boolean) => void;
   onToggleSort: (key: SortKey) => void;
@@ -180,14 +191,24 @@ export function FilterBar({
     tagFilter,
     hideReleased,
     showOthers,
-    allTags,
+    tags,
+    tagCounts,
+    search,
+    searchScope,
+    tagEditing,
     visibleCount,
     visibleTotalSec,
     onFilter,
     onTagFilter,
+    onSearch,
+    onSearchScope,
+    onTagEditing,
     onHideReleased,
     onShowOthers,
   } = filters;
+  const tagName = tagFilter
+    ? (tags.find((t) => t.id === tagFilter)?.name ?? null)
+    : null;
 
   return (
     <div className="filter-row">
@@ -213,32 +234,65 @@ export function FilterBar({
           {label}
         </button>
       ))}
-      {allTags.length > 0 && (
-        <select
-          className={tagFilter ? "tagSelect tagSelectActive" : "tagSelect"}
-          value={tagFilter ?? ""}
-          onChange={(e) => onTagFilter(e.target.value || null)}
-          aria-label="Filter by tag"
+      <TagFilterSelect
+        tags={tags}
+        counts={tagCounts}
+        value={tagFilter}
+        onChange={onTagFilter}
+      />
+      {mode === "pool" && (
+        <button
+          type="button"
+          className={tagEditing ? "filterButton tagEditOn" : "filterButton"}
+          aria-pressed={tagEditing}
+          title={
+            tagEditing
+              ? "Tag removal is on: × on each tag removes it from that track for everyone — click to turn off"
+              : "Turn on to remove tags from tracks (shows × on each tag)"
+          }
+          onClick={() => onTagEditing(!tagEditing)}
         >
-          <option value="">tags…</option>
-          {allTags.map((tag) => (
-            <option key={tag} value={tag}>
-              #{tag}
-            </option>
-          ))}
-        </select>
+          {tagEditing ? "edit tags: on" : "edit tags"}
+        </button>
       )}
+      <span className="search-box">
+        <input
+          type="search"
+          className={search ? "search-input search-active" : "search-input"}
+          value={search}
+          placeholder="search titles, tags, comments…"
+          aria-label="Search tracks"
+          onChange={(e) => onSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") onSearch("");
+          }}
+        />
+        <button
+          type="button"
+          className="filterButton search-scope"
+          title={
+            searchScope === "mine"
+              ? "Search looks at your comments only — click to include everyone's"
+              : "Search looks at everyone's comments — click for yours only"
+          }
+          onClick={() =>
+            onSearchScope(searchScope === "mine" ? "all" : "mine")
+          }
+        >
+          {searchScope === "mine" ? "my comments" : "all comments"}
+        </button>
+      </span>
       <span className="filter-meta">
-        ({tagFilter ? `#${tagFilter}` : filter}) [{visibleCount} tracks ·{" "}
+        ({tagName ?? filter}) [{visibleCount} tracks ·{" "}
         {formatDuration(Math.floor(visibleTotalSec))}]
       </span>
-      {tagFilter && (
+      {tagName && (
         <button
           type="button"
           className="tagButton"
           onClick={() => onTagFilter(null)}
         >
-          clear #{tagFilter}
+          clear {tagName}
         </button>
       )}
       <button
@@ -441,6 +495,9 @@ function TrackRow({
   showOthers,
   showComments,
   tagFilter,
+  tagsById,
+  tagActions,
+  tagEditing,
   draggable,
   onTogglePlay,
   onToggleChecked,
@@ -461,12 +518,15 @@ function TrackRow({
   showOthers: boolean;
   showComments: boolean;
   tagFilter: string | null;
+  tagsById: ReadonlyMap<string, Tag>;
+  tagActions: TrackTagActions;
+  tagEditing: boolean;
   draggable: boolean;
   onTogglePlay: () => void;
   onToggleChecked: () => void;
   onSelect: () => void;
   onHover: () => void;
-  onTagClick: (tag: string) => void;
+  onTagClick: (tagId: string) => void;
   onCommentsChange: (comments: Comment[]) => void;
   onReleasedOnChange: (releasedOn: string | null) => void;
   onAddToArrangement?: (trackId: string) => void;
@@ -532,8 +592,6 @@ function TrackRow({
     const t = window.setTimeout(() => persistLater(draft), AUTOSAVE_MS);
     return () => window.clearTimeout(t);
   }, [draft, showComments]);
-
-  const tags = unifiedTags(track.comments.map((c) => c.body));
 
   return (
     <div
@@ -617,7 +675,7 @@ function TrackRow({
           <div className="input_box1">
             <input
               value={draft}
-              placeholder="comment… use #tags"
+              placeholder="comment… #keywords"
               aria-label={`Comment for ${track.filename}`}
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => {
@@ -684,25 +742,17 @@ function TrackRow({
           onError={onError}
         />
       </div>
-      {tags.length > 0 && (
-        <div className="tag-row">
-          {tags.map((tag) => (
-            <button
-              key={tag}
-              type="button"
-              className={
-                tagFilter === tag ? "tagButton tagButtonSelected" : "tagButton"
-              }
-              onClick={(e) => {
-                e.stopPropagation();
-                onTagClick(tag);
-              }}
-            >
-              {tag}
-            </button>
-          ))}
-        </div>
-      )}
+      <TrackTagChips
+        track={track}
+        tagsById={tagsById}
+        myCommentBody={mine?.body ?? ""}
+        editable={showComments}
+        removable={showComments && tagEditing}
+        tagFilter={tagFilter}
+        actions={tagActions}
+        onTagClick={onTagClick}
+        onError={onError}
+      />
       {showComments && showOthers && others.length > 0 && (
         <ul className="other-comments">
           {others.map((c) => (
@@ -726,6 +776,10 @@ export function TrackList({
   checks,
   showOthers,
   tagFilter,
+  tags,
+  tagsById,
+  tagActions,
+  tagEditing,
   sort,
   canDragToArrange,
   loading,
@@ -747,6 +801,10 @@ export function TrackList({
   checks: TrackChecks;
   showOthers: boolean;
   tagFilter: string | null;
+  tags: Tag[];
+  tagsById: ReadonlyMap<string, Tag>;
+  tagActions: TrackTagActions;
+  tagEditing: boolean;
   sort: PoolSort;
   canDragToArrange: boolean;
   loading: boolean;
@@ -754,7 +812,7 @@ export function TrackList({
   onSelect: (track: Track) => void;
   /** Pointer entered this row. */
   onHover: (trackId: string) => void;
-  onTagClick: (tag: string) => void;
+  onTagClick: (tagId: string) => void;
   onToggleSort: (key: SortKey) => void;
   onCommentsChange: (trackId: string, comments: Comment[]) => void;
   onReleasedOnChange: (trackId: string, releasedOn: string | null) => void;
@@ -793,6 +851,7 @@ export function TrackList({
 
   return (
     <div className="trackList" style={colStyle}>
+      <TagNamesDatalist tags={tags} />
       <div className="col-header">
         <div className="trackBox1">
           <CheckAllBox tracks={tracks} checks={checks} />
@@ -856,6 +915,9 @@ export function TrackList({
           showOthers={showOthers}
           showComments={showComments}
           tagFilter={tagFilter}
+          tagsById={tagsById}
+          tagActions={tagActions}
+          tagEditing={tagEditing}
           draggable={canDragToArrange && track.present}
           onTogglePlay={() => {
             if (track.present) onTogglePlay(track);

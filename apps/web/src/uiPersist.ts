@@ -3,7 +3,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { unifiedTags, type Track } from "./api";
+import type { Tag, Track } from "./api";
 import { shortTitle } from "./format";
 
 // --- localStorage keys ---
@@ -16,6 +16,7 @@ export const COMMENT_W_KEY = "iff-comment-width";
 export const SPLIT_W_KEY = "iff-split-width";
 export const MODE_KEY = "iff-app-mode";
 export const SHOW_INSPECTOR_KEY = "iff-show-inspector";
+export const SEARCH_SCOPE_KEY = "iff-search-scope";
 
 // --- Column width defaults & bounds ---
 
@@ -38,6 +39,8 @@ export type SortKey = "name" | "duration";
 export type SortDir = "asc" | "desc";
 export type PoolSort = { key: SortKey; dir: SortDir };
 export type AppMode = "pool" | "arrange";
+/** Whose comments the search box looks at. */
+export type SearchScope = "mine" | "all";
 
 // --- Defaults ---
 
@@ -166,6 +169,22 @@ export function readMode(): AppMode {
   }
 }
 
+export function readSearchScope(): SearchScope {
+  try {
+    return localStorage.getItem(SEARCH_SCOPE_KEY) === "mine" ? "mine" : "all";
+  } catch {
+    return "all";
+  }
+}
+
+export function persistSearchScope(scope: SearchScope) {
+  try {
+    localStorage.setItem(SEARCH_SCOPE_KEY, scope);
+  } catch {
+    // ignore
+  }
+}
+
 function persistBool(key: string, value: boolean, on: string, off: string) {
   try {
     localStorage.setItem(key, value ? on : off);
@@ -227,27 +246,50 @@ export function sortTracks(list: Track[], sort: PoolSort): Track[] {
 }
 
 /**
- * Filter tracks by release state, comment presence and tag.
+ * Filter tracks by release state, comment presence, shared tag and search.
  * The `present` field is NOT checked here — pool callers typically want all
  * tracks, while arrange callers can pre-filter on `present` themselves.
+ *
+ * Search: every whitespace-separated term must match (case-insensitive
+ * substring) the filename, a shared tag name, or a comment in scope.
  */
 export function filterTracks({
   tracks,
   hideReleased,
   filter,
   tagFilter,
+  search,
+  searchScope,
+  userId,
+  tagsById,
 }: {
   tracks: Track[];
   hideReleased: boolean;
   filter: FilterId;
+  /** Shared tag id. */
   tagFilter: string | null;
+  search: string;
+  searchScope: SearchScope;
+  userId: string;
+  tagsById: ReadonlyMap<string, Tag>;
 }): Track[] {
+  const terms = search.toLowerCase().split(/\s+/).filter(Boolean);
   return tracks.filter((t) => {
     if (hideReleased && t.releasedOn) return false;
     if (filter === "commented" && t.comments.length === 0) return false;
-    if (tagFilter) {
-      const tags = unifiedTags(t.comments.map((c) => c.body));
-      if (!tags.includes(tagFilter)) return false;
+    if (tagFilter && !t.tags.some((l) => l.tagId === tagFilter)) return false;
+    if (terms.length > 0) {
+      const haystack = [
+        t.filename,
+        // "#name" so a search for "#foo" also finds the shared tag foo.
+        ...t.tags.map((l) => `#${tagsById.get(l.tagId)?.name ?? ""}`),
+        ...t.comments
+          .filter((c) => searchScope === "all" || c.userId === userId)
+          .map((c) => c.body),
+      ]
+        .join("\n")
+        .toLowerCase();
+      if (!terms.every((term) => haystack.includes(term))) return false;
     }
     return true;
   });

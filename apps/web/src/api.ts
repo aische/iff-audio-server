@@ -15,6 +15,22 @@ export type Comment = {
   userEmail: string;
 };
 
+/** Band-wide tag. */
+export type Tag = {
+  id: string;
+  name: string;
+  /** Optional grouping for browsing; null = uncategorized. */
+  category: string | null;
+};
+
+/** A shared tag on a track. */
+export type TrackTag = {
+  tagId: string;
+  addedAt: string;
+  /** Null when the user who added it no longer exists. */
+  addedByEmail: string | null;
+};
+
 export type Track = {
   id: string;
   filename: string;
@@ -27,6 +43,7 @@ export type Track = {
   createdAt: string;
   updatedAt: string;
   comments: Comment[];
+  tags: TrackTag[];
 };
 
 /** Ordered sequence item: play [inSec, outSec), then pauseSec silence, at gain. */
@@ -62,22 +79,51 @@ export type Arrangement = {
 
 type ErrorBody = { error?: string };
 
-/** Parse #tags from comment text. */
-export function parseTags(str: string): string[] {
-  return str.split(/[^A-Za-z0-9#_:-]/).flatMap((s) => {
-    const c = s.charAt(0);
-    const r = s.slice(1);
-    if (c === "#" && r.length) return [r];
-    return [];
-  });
+/** Separators between comment tokens (kept by `split` so text round-trips). */
+export const TOKEN_SEP = /([^A-Za-z0-9#_:-]+)/;
+
+/**
+ * Personal keywords: `#words` in a comment body. They only highlight and
+ * help search; shared tags are separate (`Track.tags`).
+ */
+export function parseKeywords(body: string): string[] {
+  const out = new Set<string>();
+  for (const s of body.split(TOKEN_SEP)) {
+    const name = s.replace(/^#+/, "").replaceAll("#", "");
+    if (s.startsWith("#") && name) out.add(name);
+  }
+  return [...out];
 }
 
-export function unifiedTags(bodies: string[]): string[] {
-  const set = new Set<string>();
-  for (const body of bodies) {
-    for (const tag of parseTags(body)) set.add(tag);
+/** Valid shared tag name (after stripping a leading '#'), or null. */
+export function normalizeTagName(raw: string): string | null {
+  const name = raw.trim().replace(/^#+/, "");
+  return /^[A-Za-z0-9_:-]{1,64}$/.test(name) ? name : null;
+}
+
+/** Tags of one track, resolved and sorted by category then name. */
+export function trackTagList(
+  track: Track,
+  tagsById: ReadonlyMap<string, Tag>,
+): { tag: Tag; link: TrackTag }[] {
+  return track.tags
+    .flatMap((link) => {
+      const tag = tagsById.get(link.tagId);
+      return tag ? [{ tag, link }] : [];
+    })
+    .sort((a, b) => compareTags(a.tag, b.tag));
+}
+
+/** Category (uncategorized last), then name, case-insensitive. */
+export function compareTags(a: Tag, b: Tag): number {
+  if (a.category !== b.category) {
+    if (a.category == null) return 1;
+    if (b.category == null) return -1;
+    return a.category.localeCompare(b.category, undefined, {
+      sensitivity: "base",
+    });
   }
-  return [...set].sort((a, b) => a.localeCompare(b));
+  return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
 }
 
 async function request<T>(
@@ -159,6 +205,27 @@ export const api = {
       method: "PUT",
       json: { body },
     }),
+
+  listTags: () => request<Tag[]>("/tags"),
+
+  addTrackTag: (trackId: string, name: string) =>
+    request<{ tag: Tag; link: TrackTag }>(`/tracks/${trackId}/tags`, {
+      method: "POST",
+      json: { name },
+    }),
+
+  removeTrackTag: (trackId: string, tagId: string) =>
+    request<void>(`/tracks/${trackId}/tags/${tagId}`, { method: "DELETE" }),
+
+  /** Renaming onto an existing name (case-insensitive) merges into it. */
+  updateTag: (id: string, patch: { name?: string; category?: string | null }) =>
+    request<{ tag: Tag; mergedFrom: string | null }>(`/tags/${id}`, {
+      method: "PATCH",
+      json: patch,
+    }),
+
+  deleteTag: (id: string) =>
+    request<void>(`/tags/${id}`, { method: "DELETE" }),
 
   listArrangements: () => request<ArrangementSummary[]>("/arrangements"),
 

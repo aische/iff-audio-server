@@ -1,15 +1,19 @@
-import { unifiedTags, type Comment, type Track, type User } from "./api";
+import {
+  TOKEN_SEP,
+  trackTagList,
+  type Comment,
+  type Tag,
+  type Track,
+  type User,
+} from "./api";
 import { formatDuration, shortTitle } from "./format";
-
-/** Same token split as `parseTags`: separators are kept so text round-trips. */
-const TOKEN_SEP = /([^A-Za-z0-9#_:-]+)/;
 
 function CommentBody({ body }: { body: string }) {
   return (
     <>
       {body.split(TOKEN_SEP).map((part, i) =>
         part.length > 1 && part.startsWith("#") ? (
-          <span key={i} className="inspector-tag">
+          <span key={i} className="inspector-keyword">
             {part}
           </span>
         ) : (
@@ -44,14 +48,16 @@ function formatDate(iso: string): string {
 export function TrackInspector({
   track,
   user,
+  tagsById,
   onHide,
 }: {
   track: Track;
   user: User;
+  tagsById: ReadonlyMap<string, Tag>;
   onHide: () => void;
 }) {
   const title = shortTitle(track.filename);
-  const tags = unifiedTags(track.comments.map((c) => c.body));
+  const tags = trackTagList(track, tagsById);
   // Own comment first, then others in server (creation) order.
   const comments: Comment[] = [
     ...track.comments.filter((c) => c.userId === user.id),
@@ -87,9 +93,16 @@ export function TrackInspector({
         </div>
         {tags.length > 0 && (
           <div className="inspector-tags">
-            {tags.map((tag) => (
-              <span key={tag} className="inspector-tag">
-                #{tag}
+            {tags.map(({ tag, link }) => (
+              <span
+                key={tag.id}
+                className="inspector-tag"
+                title={`added by ${link.addedByEmail ?? "a removed user"}`}
+              >
+                {tag.category && (
+                  <span className="inspector-tag-cat">{tag.category}</span>
+                )}
+                {tag.name}
               </span>
             ))}
           </div>
