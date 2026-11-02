@@ -8,12 +8,23 @@ import {
   readInspectorView,
   type InspectorView,
 } from "./storage";
-import { clipDuration, type ClipPatch } from "./timeline";
+import { clipDuration, MIN_CLIP_SEC, type ClipPatch } from "./timeline";
 import { TrimEditor, type TrimHead } from "./TrimEditor";
 import { PX_PER_SEC_MIN, trimScale } from "./waveScale";
 
 /** Inspector height in the comments view before the wave view was measured. */
 const DEFAULT_INSPECTOR_H = 176;
+
+/** Content width of the trim waveform's scroll area (inside its padding). */
+function trimViewWidth(section: HTMLElement | null): number | null {
+  const sc = section?.querySelector<HTMLElement>(".arr-trim-scroll");
+  if (!sc) return null;
+  const cs = getComputedStyle(sc);
+  const w =
+    sc.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  // A pixel of slack so rounding never brings back the horizontal scrollbar.
+  return w > 1 ? w - 1 : null;
+}
 
 /**
  * The selected clip: every control in one toolbar, with the trim waveform
@@ -33,7 +44,6 @@ export function ClipInspector({
   onPlay,
   onPlayFromStart,
   onToggleSkip,
-  onRemove,
   onChange,
   peaksVersion,
   editorPxPerSec,
@@ -54,7 +64,6 @@ export function ClipInspector({
   /** Audition from the in point, restarting if already auditioning. */
   onPlayFromStart: () => void;
   onToggleSkip: () => void;
-  onRemove: () => void;
   onChange: (patch: ClipPatch) => void;
   peaksVersion: number;
   editorPxPerSec: number;
@@ -100,6 +109,13 @@ export function ClipInspector({
   const showBody = open;
   const commentCount = track?.comments.length ?? 0;
   const commentsView = open && view === "comments";
+
+  /** Zoom at which the whole source track fits the trim view, if shown. */
+  function fitPx(): number | null {
+    const w = trimViewWidth(sectionRef.current);
+    if (w == null || !scale) return null;
+    return Math.min(scale.maxPx, w / Math.max(scale.srcDur, MIN_CLIP_SEC));
+  }
 
   return (
     <section
@@ -303,9 +319,11 @@ export function ClipInspector({
                     type="button"
                     className="filterButton"
                     title="Zoom out waveform"
-                    onClick={() =>
-                      onZoom((p) => Math.max(PX_PER_SEC_MIN, p / 1.25))
-                    }
+                    onClick={() => {
+                      // Long tracks need less than the minimum to fit whole.
+                      const floor = Math.min(PX_PER_SEC_MIN, fitPx() ?? Infinity);
+                      onZoom((p) => Math.min(p, Math.max(floor, p / 1.25)));
+                    }}
                   >
                     −
                   </button>
@@ -317,21 +335,22 @@ export function ClipInspector({
                   >
                     +
                   </button>
+                  <button
+                    type="button"
+                    className="filterButton"
+                    title="Zoom to fit the whole track"
+                    onClick={() => {
+                      const px = fitPx();
+                      if (px != null) onZoom(() => px);
+                    }}
+                  >
+                    fit
+                  </button>
                 </span>
                 <span className="arr-muted">
                   {formatPxPerSec(scale.effectivePx)} px/s
                 </span>
               </span>
-            )}
-
-            {isOwner && (
-              <button
-                type="button"
-                className="filterButton arr-danger-btn"
-                onClick={onRemove}
-              >
-                remove
-              </button>
             )}
           </>
         )}

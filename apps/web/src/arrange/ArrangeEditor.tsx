@@ -299,9 +299,6 @@ export function ArrangeEditor({
           onToggleSkip={() => {
             if (selected) transport.toggleSkip(selected.instanceId);
           }}
-          onRemove={() => {
-            if (selected) removeClip(selected.instanceId);
-          }}
           onChange={(patch) => {
             if (selected) updateClip(selected.instanceId, patch);
           }}
