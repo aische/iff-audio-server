@@ -2005,14 +2005,29 @@ body {
 }
 
 .arr-trim-selection-ro {
-  cursor: default;
-  pointer-events: none;
+  cursor: pointer;
   border-left: 1px solid var(--accent-line);
   border-right: 1px solid var(--accent-line);
 }
 
 .arr-trim-selection:active {
   cursor: grabbing;
+}
+
+.arr-trim-selection-ro:active {
+  cursor: pointer;
+}
+
+/* Drawn over the selection; never catches the pointer. */
+.arr-trim-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text);
+  pointer-events: none;
+  z-index: 2;
 }
 
 .arr-trim-handle {
