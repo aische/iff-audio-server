@@ -142,6 +142,8 @@ npm exec -w @iff/db -- drizzle-kit studio
 
 k3s under a public subpath (images, Ingress, Apache, migrate, sync, first user): see [deploy-k3s.md](./deploy-k3s.md).
 
+Database backups (create on the server, download, restore, mirror the server DB into your local install): `deploy/k3s/db.sh`, see [deploy-k3s.md § Database backups](./deploy-k3s.md#10-database-backups).
+
 ## Project layout
 
 ```

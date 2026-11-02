@@ -190,4 +190,33 @@ npm run deploy:k3s:apply
 
 Schema changes are migrated automatically (step 4). After adding/removing MP3s on the host folder, re-run sync (step 6).
 
+---
+
+## 10. Database backups
+
+`deploy/k3s/db.sh` creates and applies `pg_dump` backups. Backups are made manually (nothing runs on a schedule).
+
+```bash
+export DEPLOY_HOST=you@your-server
+
+./deploy/k3s/db.sh backup [label]            # dump the server DB, stored on the server
+./deploy/k3s/db.sh backup --download [label] # … and also copied to ./backups/
+./deploy/k3s/db.sh list                      # server and local backups
+./deploy/k3s/db.sh pull <name>               # copy a server backup to ./backups/
+./deploy/k3s/db.sh restore <name>            # server backup → server DB
+./deploy/k3s/db.sh restore backups/<file>    # local file → server DB
+./deploy/k3s/db.sh mirror [--with-mp3s]      # fresh server backup → local DB
+./deploy/k3s/db.sh mirror <name | file>      # given backup → local DB
+```
+
+- **Where:** server backups go to `/var/backups/iff-audio` on the k3s node (root-only; override with `SERVER_BACKUP_DIR`). Local copies go to `./backups/` (gitignored). Backups contain password hashes, so treat them as secrets.
+- **Names:** `iff-<origin>-<YYYYmmdd-HHMMSS>[-label].dump`. Origin is `server` or `local`. Restoring a `local` backup (or one with another name) to the server needs a stronger confirmation, because it brings that DB's users and passwords along.
+- **Sessions:** session rows are not backed up. After a restore, everyone logs in again.
+- **Schema:** a backup from older code is fine, because migrations run after the restore. A backup from newer code than what is deployed (or checked out, for `mirror`) is refused.
+- **Safety:** `restore` and `mirror` explain what will happen and ask you to type a confirmation phrase. Before replacing anything, they write a safety backup of the DB they replace (`…-pre-restore` on the server, `…-pre-mirror` in `./backups/`).
+
+**`restore`** restores into a temporary database while the site keeps running. It then stops the API for a few seconds, swaps the databases, starts the API (which runs migrations) and runs `sync-library.sh`. If the restore step fails, the live DB is not changed. A local file is also copied to the server backup folder, as a record of what was applied.
+
+**`mirror`** replaces your local Docker Compose DB, then runs `npm run migrate -w @iff/db` and `npm run sync-library -w api`. The local MP3 folder does not have to match the server: tracks are matched by filename. Server tracks without a local file show as missing but keep their comments, waveform and duration. Local-only MP3s are added as new tracks and disappear on the next mirror. `--with-mp3s` first copies MP3s that are missing locally from the server's library folder (`hostPath` in `site.yaml`), using `rsync` and `sudo` on the node. It never overwrites or deletes local files. Copy MP3s with their mtime preserved (`rsync -t`), otherwise sync treats them as changed and recomputes their waveforms.
+
 Local development: see [README.md](./README.md).

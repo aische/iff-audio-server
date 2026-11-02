@@ -68,6 +68,28 @@ site_ingress_host() {
   printf '%s' "$h"
 }
 
+# MP3 folder on the k3s node (hostPath of the iff-library-pv PersistentVolume).
+site_library_host_path() {
+  local site="${1:-deploy/k3s/site.yaml}"
+  local p
+  p="$(
+    awk '
+      $0 ~ /^[[:space:]]*name:[[:space:]]*iff-library-pv[[:space:]]*$/ { in_pv = 1 }
+      in_pv && $0 ~ /^[[:space:]]*path:[[:space:]]*\// {
+        sub(/.*path:[[:space:]]*/, "")
+        sub(/[[:space:]]+$/, "")
+        print
+        exit
+      }
+    ' "$site"
+  )"
+  if [[ -z "$p" ]]; then
+    echo "site.yaml: could not read hostPath.path of iff-library-pv" >&2
+    exit 1
+  fi
+  printf '%s' "${p%/}"
+}
+
 # Ensure API Ingress path matches ${base}/api(/|$)(.*)
 site_validate_paths() {
   local site="${1:-deploy/k3s/site.yaml}"

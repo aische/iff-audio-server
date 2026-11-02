@@ -37,6 +37,9 @@ coverage/
 # Local data (Compose volumes, MP3 library folder)
 data/
 tmp/
+
+# Database backups (contain password hashes)
+backups/
 *.wav
 *.aiff
 *.aif
