@@ -2299,16 +2299,6 @@ body {
   margin-right: 2px;
 }
 
-.arr-danger-btn {
-  color: var(--danger);
-  border-color: rgb(196 92 74 / 55%);
-}
-
-.arr-danger-btn:hover:not(:disabled) {
-  background: rgb(196 92 74 / 15%);
-  border-color: var(--danger);
-}
-
 /* Comments: shown instead of the waveform via the wave / comments toggle. */
 .arr-comments {
   flex: 1 1 auto;

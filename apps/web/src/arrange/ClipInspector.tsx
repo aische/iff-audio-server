@@ -44,7 +44,6 @@ export function ClipInspector({
   onPlay,
   onPlayFromStart,
   onToggleSkip,
-  onRemove,
   onChange,
   peaksVersion,
   editorPxPerSec,
@@ -65,7 +64,6 @@ export function ClipInspector({
   /** Audition from the in point, restarting if already auditioning. */
   onPlayFromStart: () => void;
   onToggleSkip: () => void;
-  onRemove: () => void;
   onChange: (patch: ClipPatch) => void;
   peaksVersion: number;
   editorPxPerSec: number;
@@ -353,16 +351,6 @@ export function ClipInspector({
                   {formatPxPerSec(scale.effectivePx)} px/s
                 </span>
               </span>
-            )}
-
-            {isOwner && (
-              <button
-                type="button"
-                className="filterButton arr-danger-btn"
-                onClick={onRemove}
-              >
-                remove
-              </button>
             )}
           </>
         )}
