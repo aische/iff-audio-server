@@ -40,6 +40,7 @@ export function ArrangeEditor({
   onAddApiChange,
   onCheckTracks,
   onHoverTrack,
+  onSelectTrack,
   onArrangementPlayingChange,
   stopToken,
 }: {
@@ -52,7 +53,9 @@ export function ArrangeEditor({
   onError: (message: string | null) => void;
   onAddApiChange: (api: ArrangeAddApi | null) => void;
   onCheckTracks: (trackIds: string[]) => void;
-  onHoverTrack: (trackId: string) => void;
+  onHoverTrack: (trackId: string | null) => void;
+  /** Track of the selected clip, or null; highlighted in the library. */
+  onSelectTrack: (trackId: string | null) => void;
   onArrangementPlayingChange: (playing: boolean) => void;
   stopToken: number;
 }) {
@@ -137,6 +140,15 @@ export function ArrangeEditor({
     });
     return () => onAddApiChange(null);
   }, [isOwner, onAddApiChange, addTrackRef]);
+
+  // Derived from clips, so removing the selected clip clears it too.
+  const selectedTrackId = selectedId
+    ? (clips.find((c) => c.instanceId === selectedId)?.trackId ?? null)
+    : null;
+  useEffect(() => {
+    onSelectTrack(selectedTrackId);
+    return () => onSelectTrack(null);
+  }, [selectedTrackId, onSelectTrack]);
 
   function moveClip(clipId: string, insertIndex: number) {
     setClips((prev) => {

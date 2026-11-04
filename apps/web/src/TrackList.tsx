@@ -501,7 +501,6 @@ function TrackRow({
   draggable,
   onTogglePlay,
   onToggleChecked,
-  onSelect,
   onHover,
   onTagClick,
   onCommentsChange,
@@ -524,8 +523,7 @@ function TrackRow({
   draggable: boolean;
   onTogglePlay: () => void;
   onToggleChecked: () => void;
-  onSelect: () => void;
-  onHover: () => void;
+  onHover: (hovered: boolean) => void;
   onTagClick: (tagId: string) => void;
   onCommentsChange: (comments: Comment[]) => void;
   onReleasedOnChange: (releasedOn: string | null) => void;
@@ -615,8 +613,8 @@ function TrackRow({
         e.dataTransfer.setData("text/plain", track.id);
         e.dataTransfer.effectAllowed = "copy";
       }}
-      onClick={onSelect}
-      onMouseEnter={onHover}
+      onMouseEnter={() => onHover(true)}
+      onMouseLeave={() => onHover(false)}
       onDoubleClick={(e) => {
         // Double-clicking a control inside the row is not "add this track".
         if (
@@ -784,7 +782,6 @@ export function TrackList({
   canDragToArrange,
   loading,
   onTogglePlay,
-  onSelect,
   onHover,
   onTagClick,
   onToggleSort,
@@ -797,6 +794,7 @@ export function TrackList({
   user: User;
   mode: AppMode;
   playingId: string | null;
+  /** Track of the clip selected in the arrangement (highlighted), if any. */
   selectedId: string | null;
   checks: TrackChecks;
   showOthers: boolean;
@@ -809,9 +807,8 @@ export function TrackList({
   canDragToArrange: boolean;
   loading: boolean;
   onTogglePlay: (track: Track) => void;
-  onSelect: (track: Track) => void;
-  /** Pointer entered this row. */
-  onHover: (trackId: string) => void;
+  /** Pointer entered this row, or left it (null). */
+  onHover: (trackId: string | null) => void;
   onTagClick: (tagId: string) => void;
   onToggleSort: (key: SortKey) => void;
   onCommentsChange: (trackId: string, comments: Comment[]) => void;
@@ -925,8 +922,7 @@ export function TrackList({
           onToggleChecked={() => {
             if (track.present) checks.onToggle(track.id);
           }}
-          onSelect={() => onSelect(track)}
-          onHover={() => onHover(track.id)}
+          onHover={(on) => onHover(on ? track.id : null)}
           onTagClick={onTagClick}
           onCommentsChange={(next) => onCommentsChange(track.id, next)}
           onReleasedOnChange={(releasedOn) =>

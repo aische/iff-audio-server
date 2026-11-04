@@ -40,8 +40,8 @@ function formatDate(iso: string): string {
 }
 
 /**
- * Read-only detail card for one track (last hovered in the library or the
- * arrangement, else the selected row).
+ * Read-only detail card for the track hovered in the library or the
+ * arrangement.
  * Pointer-transparent (except its hide button) so it never blocks the rows
  * underneath.
  */

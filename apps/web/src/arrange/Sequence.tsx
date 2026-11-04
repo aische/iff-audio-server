@@ -62,7 +62,7 @@ export function Sequence({
   soloClipId: string | null;
   skippedIds: ReadonlySet<string>;
   onSelect: (instanceId: string) => void;
-  onHoverTrack: (trackId: string) => void;
+  onHoverTrack: (trackId: string | null) => void;
   onToggleSkip: (instanceId: string) => void;
   onPlayClip: (instanceId: string) => void;
   onRemove: (instanceId: string) => void;
@@ -224,7 +224,7 @@ export function Sequence({
                 beingDragged={dragClipId === clip.instanceId}
                 lengthFrac={maxClipDur > 0 ? clipDuration(clip) / maxClipDur : 0}
                 onSelect={() => onSelect(clip.instanceId)}
-                onHover={() => onHoverTrack(clip.trackId)}
+                onHover={(on) => onHoverTrack(on ? clip.trackId : null)}
                 onToggleSkip={() => onToggleSkip(clip.instanceId)}
                 onPlay={() => onPlayClip(clip.instanceId)}
                 onRemove={() => onRemove(clip.instanceId)}
@@ -280,7 +280,7 @@ function SequenceRow({
   /** Clip length relative to the longest clip, for the length bar. */
   lengthFrac: number;
   onSelect: () => void;
-  onHover: () => void;
+  onHover: (hovered: boolean) => void;
   onToggleSkip: () => void;
   onPlay: () => void;
   onRemove: () => void;
@@ -313,7 +313,8 @@ function SequenceRow({
         .filter(Boolean)
         .join(" ")}
       onClick={onSelect}
-      onMouseEnter={onHover}
+      onMouseEnter={() => onHover(true)}
+      onMouseLeave={() => onHover(false)}
     >
       {isOwner && (
         <span
