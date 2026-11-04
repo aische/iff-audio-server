@@ -23,6 +23,10 @@
   --play: #8cc152;
   --play-soft: rgb(140 193 82 / 18%);
   --play-line: rgb(140 193 82 / 55%);
+  /* Shared tags: muted mauve, kept cool so it never reads as --released */
+  --tag: #c987b0;
+  --tag-soft: rgb(201 135 176 / 16%);
+  --tag-line: rgb(201 135 176 / 40%);
   /* Drag-and-drop targets */
   --drop: #9ed98a;
   --drop-soft: rgb(158 217 138 / 14%);
@@ -314,8 +318,8 @@ body {
 }
 
 .tagSelectActive {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--tag);
+  color: var(--tag);
 }
 
 .search-box {
@@ -539,12 +543,12 @@ body {
 
 .inspector-tags .inspector-tag {
   padding: 0 5px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--tag-line);
   font-size: 11px;
 }
 
 .inspector-tag {
-  color: var(--text);
+  color: var(--tag);
 }
 
 .inspector-tag-cat {
@@ -1063,7 +1067,7 @@ body {
   align-items: stretch;
   box-sizing: border-box;
   height: 16px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--tag-line);
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
@@ -1071,12 +1075,12 @@ body {
 }
 
 .tag-chip:hover {
-  border-color: var(--text-faint);
+  border-color: var(--tag);
 }
 
 .tag-chip-selected {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--tag);
+  background: var(--tag-soft);
 }
 
 .tag-chip-name,
@@ -1085,17 +1089,13 @@ body {
   padding: 0 5px;
   border: none;
   background: transparent;
-  color: var(--text-dim);
+  color: var(--tag);
   cursor: pointer;
 }
 
 .tag-chip-name:hover,
 .tag-chip-selected .tag-chip-name {
   color: var(--text);
-}
-
-.tag-chip-selected .tag-chip-name {
-  color: var(--accent);
 }
 
 /* Only rendered while the global "edit tags" toggle is on. */
@@ -1136,9 +1136,10 @@ body {
   cursor: pointer;
 }
 
+/* Hover previews the keyword turning into a (mauve) shared tag. */
 .tag-suggest:hover:not(:disabled) {
-  border-color: var(--accent-line);
-  color: var(--accent);
+  border-color: var(--tag-line);
+  color: var(--tag);
 }
 
 .tag-add {
@@ -1162,8 +1163,8 @@ body {
 }
 
 .tag-add:hover {
-  border-color: var(--text-faint);
-  color: var(--text);
+  border-color: var(--tag-line);
+  color: var(--tag);
 }
 
 .tag-add-form input {
@@ -1171,7 +1172,7 @@ body {
   width: 110px;
   height: 16px;
   padding: 0 4px;
-  border: 1px solid var(--accent-line);
+  border: 1px solid var(--tag-line);
   background: var(--bg);
   color: var(--text);
   font: inherit;
@@ -1181,7 +1182,7 @@ body {
 
 .tag-add-form input:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--tag);
 }
 
 .other-comments {
