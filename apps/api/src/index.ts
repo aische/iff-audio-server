@@ -117,9 +117,12 @@ const changePasswordLimit = limitBy(
 await app.register(fastifyStatic, { root: libraryPath, serve: false });
 
 /** Header-safe ASCII fallback plus RFC 5987 UTF-8 filename. */
-function contentDisposition(filename: string) {
+function contentDisposition(
+  filename: string,
+  kind: "inline" | "attachment" = "inline",
+) {
   const fallback = filename.replace(/[^\x20-\x7e]|["\\]/g, "_");
-  return `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename).replace(
+  return `${kind}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename).replace(
     /['()*]/g,
     (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
   )}`;
@@ -416,9 +419,18 @@ app.get<{ Params: { id: string } }>(
   },
 );
 
-app.get<{ Params: { id: string } }>(
+/** Streams the MP3 for playback; `?download=1` makes the browser save it. */
+app.get<{ Params: { id: string }; Querystring: { download?: "1" } }>(
   "/tracks/:id/download",
-  { schema: { params: idParams } },
+  {
+    schema: {
+      params: idParams,
+      querystring: {
+        type: "object",
+        properties: { download: { type: "string", enum: ["1"] } },
+      },
+    },
+  },
   async (request, reply) => {
     const [track] = await db
       .select()
@@ -443,7 +455,13 @@ app.get<{ Params: { id: string } }>(
       return reply.code(404).send({ error: "file missing" });
     }
 
-    reply.header("Content-Disposition", contentDisposition(track.filename));
+    reply.header(
+      "Content-Disposition",
+      contentDisposition(
+        track.filename,
+        request.query.download === "1" ? "attachment" : "inline",
+      ),
+    );
     return reply.type("audio/mpeg").sendFile(path.basename(absPath));
   },
 );

@@ -6,7 +6,14 @@ import {
   type CSSProperties,
   type FormEvent,
 } from "react";
-import { api, type Comment, type Tag, type Track, type User } from "./api";
+import {
+  api,
+  trackDownloadUrl,
+  type Comment,
+  type Tag,
+  type Track,
+  type User,
+} from "./api";
 import { formatDuration, shortTitle } from "./format";
 import { TRACK_MIME } from "./mime";
 import {
@@ -536,7 +543,6 @@ function TrackRow({
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
-  const [downloading, setDownloading] = useState(false);
   const draftRef = useRef(draft);
   const savedBodyRef = useRef(mine?.body ?? "");
   const seqRef = useRef(0);
@@ -707,28 +713,28 @@ function TrackRow({
           </span>
         </div>
       )}
-      <button
-        type="button"
-        className="track-dl"
-        disabled={!track.present || downloading}
-        title={`Download ${track.filename}`}
-        aria-label={`Download ${track.filename}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (!track.present || downloading) return;
-          setDownloading(true);
-          void api
-            .downloadTrack(track.id, track.filename)
-            .catch((err) =>
-              onError(
-                err instanceof Error ? err.message : "Failed to download",
-              ),
-            )
-            .finally(() => setDownloading(false));
-        }}
-      >
-        {downloading ? "…" : "↓"}
-      </button>
+      {track.present ? (
+        <a
+          className="track-dl"
+          href={trackDownloadUrl(track.id)}
+          download={track.filename}
+          // Dragging from here drags the row (into an arrangement), not the link.
+          draggable={false}
+          title={`Download ${track.filename}`}
+          aria-label={`Download ${track.filename}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          ↓
+        </a>
+      ) : (
+        <span
+          className="track-dl track-dl-off"
+          title="File missing from the library"
+          aria-hidden="true"
+        >
+          ↓
+        </span>
+      )}
       <div
         className="release-wrap"
         onClick={(e) => e.stopPropagation()}

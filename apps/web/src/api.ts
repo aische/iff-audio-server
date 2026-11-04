@@ -126,9 +126,32 @@ export function compareTags(a: Tag, b: Tag): number {
   return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
 }
 
+export const SESSION_EXPIRED_MESSAGE =
+  "Your session has expired. Please sign in again.";
+
+let onSessionLost: (() => void) | null = null;
+
+/** Called when a request fails with 401 because the session is gone. */
+export function setSessionLostHandler(fn: (() => void) | null) {
+  onSessionLost = fn;
+}
+
+/**
+ * Report a lost session and return the error to throw. Callers usually show
+ * the thrown message, so it matches what the login form shows.
+ */
+function sessionLost(): Error {
+  onSessionLost?.();
+  return new Error(SESSION_EXPIRED_MESSAGE);
+}
+
 async function request<T>(
   path: string,
-  init?: RequestInit & { json?: unknown },
+  init?: RequestInit & {
+    json?: unknown;
+    /** A 401 here means wrong credentials, not a lost session. */
+    allow401?: boolean;
+  },
 ): Promise<T> {
   const headers = new Headers(init?.headers);
   let body = init?.body;
@@ -153,6 +176,7 @@ async function request<T>(
     : undefined;
 
   if (!res.ok) {
+    if (res.status === 401 && !init?.allow401) throw sessionLost();
     const message =
       data && typeof data === "object" && "error" in data && data.error
         ? data.error
@@ -167,6 +191,11 @@ export function trackStreamUrl(id: string) {
   return `${API_URL}/tracks/${id}/download`;
 }
 
+/** Link that makes the browser save the MP3 (streamed, with its own progress). */
+export function trackDownloadUrl(id: string) {
+  return `${trackStreamUrl(id)}?download=1`;
+}
+
 export const api = {
   me: () => request<User>("/auth/me"),
 
@@ -174,6 +203,7 @@ export const api = {
     request<User>("/auth/login", {
       method: "POST",
       json: { email, password },
+      allow401: true,
     }),
 
   logout: () => request<void>("/auth/logout", { method: "POST" }),
@@ -182,6 +212,7 @@ export const api = {
     request<void>("/auth/change-password", {
       method: "POST",
       json: { currentPassword, newPassword },
+      allow401: true,
     }),
 
   listTracks: () => request<Track[]>("/tracks"),
@@ -252,26 +283,4 @@ export const api = {
   deleteArrangement: (id: string) =>
     request<void>(`/arrangements/${id}`, { method: "DELETE" }),
 
-  downloadTrack: async (id: string, filename: string) => {
-    const res = await fetch(trackStreamUrl(id), {
-      credentials: "include",
-    });
-    if (!res.ok) {
-      let message = `Download failed (${res.status})`;
-      try {
-        const data = (await res.json()) as ErrorBody;
-        if (data.error) message = data.error;
-      } catch {
-        // ignore non-JSON error bodies
-      }
-      throw new Error(message);
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  },
 };
