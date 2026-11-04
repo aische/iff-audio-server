@@ -179,9 +179,8 @@ function StudioShell({
   const [tags, setTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState<Track | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Track of the clip selected in the open arrangement; in arrange mode the
-  // library highlights it instead of its own selection.
+  // Track of the clip selected in the open arrangement; the library
+  // highlights it in arrange mode.
   const [arrangeSelectedTrackId, setArrangeSelectedTrackId] = useState<
     string | null
   >(null);
@@ -318,7 +317,6 @@ function StudioShell({
 
   /** Play a track in the transport, or unload it if it is the current one. */
   function togglePlayTrack(track: Track) {
-    setSelectedId(track.id);
     if (playing?.id === track.id) {
       setPlaying(null);
       return;
@@ -671,9 +669,7 @@ function StudioShell({
               user={user}
               mode={mode}
               playingId={playing?.id ?? null}
-              selectedId={
-                mode === "arrange" ? arrangeSelectedTrackId : selectedId
-              }
+              selectedId={mode === "arrange" ? arrangeSelectedTrackId : null}
               checks={checks}
               showOthers={showOthers}
               tagFilter={activeTagFilter}
@@ -687,7 +683,6 @@ function StudioShell({
               }
               loading={loading}
               onTogglePlay={togglePlayTrack}
-              onSelect={(t) => setSelectedId(t.id)}
               onHover={hoverTrack}
               onTagClick={setTagFilter}
               onToggleSort={toggleSort}

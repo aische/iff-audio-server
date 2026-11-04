@@ -501,7 +501,6 @@ function TrackRow({
   draggable,
   onTogglePlay,
   onToggleChecked,
-  onSelect,
   onHover,
   onTagClick,
   onCommentsChange,
@@ -524,7 +523,6 @@ function TrackRow({
   draggable: boolean;
   onTogglePlay: () => void;
   onToggleChecked: () => void;
-  onSelect: () => void;
   onHover: (hovered: boolean) => void;
   onTagClick: (tagId: string) => void;
   onCommentsChange: (comments: Comment[]) => void;
@@ -615,7 +613,6 @@ function TrackRow({
         e.dataTransfer.setData("text/plain", track.id);
         e.dataTransfer.effectAllowed = "copy";
       }}
-      onClick={onSelect}
       onMouseEnter={() => onHover(true)}
       onMouseLeave={() => onHover(false)}
       onDoubleClick={(e) => {
@@ -785,7 +782,6 @@ export function TrackList({
   canDragToArrange,
   loading,
   onTogglePlay,
-  onSelect,
   onHover,
   onTagClick,
   onToggleSort,
@@ -798,6 +794,7 @@ export function TrackList({
   user: User;
   mode: AppMode;
   playingId: string | null;
+  /** Track of the clip selected in the arrangement (highlighted), if any. */
   selectedId: string | null;
   checks: TrackChecks;
   showOthers: boolean;
@@ -810,7 +807,6 @@ export function TrackList({
   canDragToArrange: boolean;
   loading: boolean;
   onTogglePlay: (track: Track) => void;
-  onSelect: (track: Track) => void;
   /** Pointer entered this row, or left it (null). */
   onHover: (trackId: string | null) => void;
   onTagClick: (tagId: string) => void;
@@ -926,7 +922,6 @@ export function TrackList({
           onToggleChecked={() => {
             if (track.present) checks.onToggle(track.id);
           }}
-          onSelect={() => onSelect(track)}
           onHover={(on) => onHover(on ? track.id : null)}
           onTagClick={onTagClick}
           onCommentsChange={(next) => onCommentsChange(track.id, next)}
