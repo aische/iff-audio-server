@@ -1,7 +1,7 @@
 import type { ArrangementClip, Track } from "../api";
 import { PLAYBACK_MODES, type PlaybackMode } from "../arrangePlayback";
 import { formatClock, shortTitle } from "../format";
-import { downloadArrangementTsv } from "./exportTsv";
+import { downloadCutList } from "./exportCutList";
 import { Menu } from "./Menu";
 import { usePlayhead, type PlayheadStore } from "./playhead";
 
@@ -167,12 +167,12 @@ export function TransportBar({
               disabled={clips.length === 0}
               onClick={() => {
                 close();
-                downloadArrangementTsv(name, clips, trackById);
+                downloadCutList(name, clips, trackById);
               }}
             >
-              Export TSV
+              Export cut list
               <span className="arr-menu-hint">
-                filename, in, out, pause, gain
+                start, title, in, out, pause, gain (.txt)
               </span>
             </button>
             <button
