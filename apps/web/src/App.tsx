@@ -5,7 +5,15 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { api, type Comment, type Tag, type Track, type User } from "./api";
+import {
+  SESSION_EXPIRED_MESSAGE,
+  api,
+  setSessionLostHandler,
+  type Comment,
+  type Tag,
+  type Track,
+  type User,
+} from "./api";
 import { ArrangeShell, type ArrangeAddApi } from "./ArrangeView";
 import { newClipForTrack } from "./clips";
 import { TrackInspector } from "./TrackInspector";
@@ -70,6 +78,17 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
+  // Only while logged in: a 401 from the boot-time `me()` check just means
+  // "not signed in yet", not an expired session.
+  useEffect(() => {
+    if (!user) return;
+    setSessionLostHandler(() => {
+      setUser(null);
+      setError(SESSION_EXPIRED_MESSAGE);
+    });
+    return () => setSessionLostHandler(null);
+  }, [user]);
 
   if (booting) {
     return (
