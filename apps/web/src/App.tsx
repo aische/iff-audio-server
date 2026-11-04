@@ -1,4 +1,10 @@
-import { useEffect, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { api, type Comment, type Tag, type Track, type User } from "./api";
 import { ArrangeShell, type ArrangeAddApi } from "./ArrangeView";
 import { newClipForTrack } from "./clips";
@@ -102,6 +108,9 @@ export default function App() {
   );
 }
 
+/** Grace period before the info card hides after the pointer leaves a track. */
+const HOVER_CLEAR_DELAY_MS = 150;
+
 function LoginForm({
   onSuccess,
   onError,
@@ -171,9 +180,10 @@ function StudioShell({
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState<Track | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Last hovered track (library row or arrangement clip); never cleared, so
-  // the info card keeps showing it after the pointer moves on.
+  // Hovered track (library row or arrangement clip); drives the info card,
+  // which is hidden while nothing is hovered.
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const hoverClearTimer = useRef<number | undefined>(undefined);
   const [filter, setFilter] = useState<FilterId>("all");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -209,6 +219,20 @@ function StudioShell({
     SPLIT_W_MIN,
     SPLIT_W_MAX,
   );
+
+  // Clearing is delayed so the card doesn't flicker while the pointer
+  // crosses gaps between rows; entering another row cancels it.
+  const hoverTrack = useCallback((id: string | null) => {
+    window.clearTimeout(hoverClearTimer.current);
+    if (id) setHoveredId(id);
+    else {
+      hoverClearTimer.current = window.setTimeout(
+        () => setHoveredId(null),
+        HOVER_CLEAR_DELAY_MS,
+      );
+    }
+  }, []);
+  useEffect(() => () => window.clearTimeout(hoverClearTimer.current), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -414,11 +438,9 @@ function StudioShell({
     tagsById,
   });
   const visible = sortTracks(filtered, sort);
-  // Last hovered track wins; the selected row is only the initial fallback.
   // Looked up in all tracks: arrangement clips may be filtered out of the list.
-  const inspectedId = hoveredId ?? selectedId;
-  const inspected = inspectedId
-    ? (tracks.find((t) => t.id === inspectedId) ?? null)
+  const inspected = hoveredId
+    ? (tracks.find((t) => t.id === hoveredId) ?? null)
     : null;
   const visibleTotalSec = visible.reduce(
     (sum, t) => sum + (t.durationSeconds ?? 0),
@@ -659,7 +681,7 @@ function StudioShell({
               loading={loading}
               onTogglePlay={togglePlayTrack}
               onSelect={(t) => setSelectedId(t.id)}
-              onHover={setHoveredId}
+              onHover={hoverTrack}
               onTagClick={setTagFilter}
               onToggleSort={toggleSort}
               onCommentsChange={patchTrackComments}
@@ -700,7 +722,7 @@ function StudioShell({
               onAddApiChange={setArrangeApi}
               onArrangementPlayingChange={onArrangementPlayingChange}
               stopToken={stopToken}
-              onHoverTrack={setHoveredId}
+              onHoverTrack={hoverTrack}
               openRequest={openArrangement}
               onCheckTracks={(ids) => setCheckedIds(new Set(ids))}
             />

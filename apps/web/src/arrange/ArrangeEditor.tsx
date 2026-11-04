@@ -52,7 +52,7 @@ export function ArrangeEditor({
   onError: (message: string | null) => void;
   onAddApiChange: (api: ArrangeAddApi | null) => void;
   onCheckTracks: (trackIds: string[]) => void;
-  onHoverTrack: (trackId: string) => void;
+  onHoverTrack: (trackId: string | null) => void;
   onArrangementPlayingChange: (playing: boolean) => void;
   stopToken: number;
 }) {

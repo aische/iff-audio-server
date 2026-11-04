@@ -29,8 +29,8 @@ export function ArrangeShell({
   onAddApiChange: (api: ArrangeAddApi | null) => void;
   onArrangementPlayingChange: (playing: boolean) => void;
   stopToken: number;
-  /** Pointer entered a clip of this track (drives the info card). */
-  onHoverTrack: (trackId: string) => void;
+  /** Pointer entered a clip of this track, or left it (null); drives the info card. */
+  onHoverTrack: (trackId: string | null) => void;
   /** Open this arrangement (e.g. one just created from checked tracks). */
   openRequest: { id: string; seq: number } | null;
   /** Replace the library's checked tracks with these track ids. */

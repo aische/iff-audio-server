@@ -525,7 +525,7 @@ function TrackRow({
   onTogglePlay: () => void;
   onToggleChecked: () => void;
   onSelect: () => void;
-  onHover: () => void;
+  onHover: (hovered: boolean) => void;
   onTagClick: (tagId: string) => void;
   onCommentsChange: (comments: Comment[]) => void;
   onReleasedOnChange: (releasedOn: string | null) => void;
@@ -616,7 +616,8 @@ function TrackRow({
         e.dataTransfer.effectAllowed = "copy";
       }}
       onClick={onSelect}
-      onMouseEnter={onHover}
+      onMouseEnter={() => onHover(true)}
+      onMouseLeave={() => onHover(false)}
       onDoubleClick={(e) => {
         // Double-clicking a control inside the row is not "add this track".
         if (
@@ -810,8 +811,8 @@ export function TrackList({
   loading: boolean;
   onTogglePlay: (track: Track) => void;
   onSelect: (track: Track) => void;
-  /** Pointer entered this row. */
-  onHover: (trackId: string) => void;
+  /** Pointer entered this row, or left it (null). */
+  onHover: (trackId: string | null) => void;
   onTagClick: (tagId: string) => void;
   onToggleSort: (key: SortKey) => void;
   onCommentsChange: (trackId: string, comments: Comment[]) => void;
@@ -926,7 +927,7 @@ export function TrackList({
             if (track.present) checks.onToggle(track.id);
           }}
           onSelect={() => onSelect(track)}
-          onHover={() => onHover(track.id)}
+          onHover={(on) => onHover(on ? track.id : null)}
           onTagClick={onTagClick}
           onCommentsChange={(next) => onCommentsChange(track.id, next)}
           onReleasedOnChange={(releasedOn) =>
