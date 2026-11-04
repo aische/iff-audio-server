@@ -16,6 +16,10 @@
   --accent-line: rgb(212 160 23 / 55%);
   --danger: #c45c4a;
   --ok: #7a9a5a;
+  /* Library playback (arrangement playback stays amber) */
+  --play: #8cc152;
+  --play-soft: rgb(140 193 82 / 18%);
+  --play-line: rgb(140 193 82 / 55%);
   /* Drag-and-drop targets */
   --drop: #9ed98a;
   --drop-soft: rgb(158 217 138 / 14%);
@@ -370,9 +374,9 @@ body {
   min-width: 48px;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--play-line);
   background: var(--bg-row);
-  color: var(--accent);
+  color: var(--play);
   font: inherit;
   font-size: 11px;
   font-weight: 600;
@@ -381,8 +385,8 @@ body {
 }
 
 .transport-play:hover {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--play);
+  background: var(--play-soft);
 }
 
 .transport-title {
@@ -408,7 +412,7 @@ body {
   flex: 1;
   min-width: 80px;
   max-width: 420px;
-  accent-color: var(--accent);
+  accent-color: var(--play);
   height: 4px;
   cursor: pointer;
 }
@@ -747,13 +751,13 @@ body {
 }
 
 .track1.track-playing {
-  background: var(--accent-soft);
-  box-shadow: inset 3px 0 0 var(--accent);
+  background: var(--play-soft);
+  box-shadow: inset 3px 0 0 var(--play);
 }
 
 .track1.track-selected:not(.track-playing) {
-  background: var(--bg-row-hover);
-  box-shadow: inset 3px 0 0 var(--accent-line);
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .track1.track-checked:not(.track-playing) .trackDur {
@@ -886,13 +890,13 @@ body {
 }
 
 .track-play:hover:not(:disabled) {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--play);
+  border-color: var(--play);
 }
 
 .track-play-active {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--play);
+  border-color: var(--play);
 }
 
 .track-play:disabled {
@@ -1774,8 +1778,23 @@ body {
 
 .arr-row-selected {
   border-color: var(--accent);
-  background: var(--bg-row-hover);
   box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+/* Playback is a fill + bar so it outranks the selection outline. */
+.arr-row-playing {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.arr-row-playing:hover {
+  background: var(--accent-soft);
+}
+
+.arr-row-selected.arr-row-playing {
+  box-shadow:
+    inset 3px 0 0 var(--accent),
+    inset 0 0 0 1px var(--accent-line);
 }
 
 .arr-row-released {
