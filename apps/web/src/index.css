@@ -752,7 +752,8 @@ body {
 }
 
 .track1.track-selected:not(.track-playing) {
-  box-shadow: inset 3px 0 0 var(--line);
+  background: var(--bg-row-hover);
+  box-shadow: inset 3px 0 0 var(--accent-line);
 }
 
 .track1.track-checked:not(.track-playing) .trackDur {

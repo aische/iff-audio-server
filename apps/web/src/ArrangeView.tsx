@@ -18,6 +18,7 @@ export function ArrangeShell({
   onArrangementPlayingChange,
   stopToken,
   onHoverTrack,
+  onSelectTrack,
   openRequest,
   onCheckTracks,
 }: {
@@ -31,6 +32,8 @@ export function ArrangeShell({
   stopToken: number;
   /** Pointer entered a clip of this track, or left it (null); drives the info card. */
   onHoverTrack: (trackId: string | null) => void;
+  /** Track of the selected clip, or null (none selected / no arrangement open). */
+  onSelectTrack: (trackId: string | null) => void;
   /** Open this arrangement (e.g. one just created from checked tracks). */
   openRequest: { id: string; seq: number } | null;
   /** Replace the library's checked tracks with these track ids. */
@@ -128,6 +131,7 @@ export function ArrangeShell({
         onAddApiChange={onAddApiChange}
         onCheckTracks={onCheckTracks}
         onHoverTrack={onHoverTrack}
+        onSelectTrack={onSelectTrack}
         onArrangementPlayingChange={onArrangementPlayingChange}
         stopToken={stopToken}
       />

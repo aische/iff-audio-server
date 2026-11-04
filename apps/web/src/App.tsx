@@ -180,6 +180,11 @@ function StudioShell({
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState<Track | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Track of the clip selected in the open arrangement; in arrange mode the
+  // library highlights it instead of its own selection.
+  const [arrangeSelectedTrackId, setArrangeSelectedTrackId] = useState<
+    string | null
+  >(null);
   // Hovered track (library row or arrangement clip); drives the info card,
   // which is hidden while nothing is hovered.
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -666,7 +671,9 @@ function StudioShell({
               user={user}
               mode={mode}
               playingId={playing?.id ?? null}
-              selectedId={selectedId}
+              selectedId={
+                mode === "arrange" ? arrangeSelectedTrackId : selectedId
+              }
               checks={checks}
               showOthers={showOthers}
               tagFilter={activeTagFilter}
@@ -723,6 +730,7 @@ function StudioShell({
               onArrangementPlayingChange={onArrangementPlayingChange}
               stopToken={stopToken}
               onHoverTrack={hoverTrack}
+              onSelectTrack={setArrangeSelectedTrackId}
               openRequest={openArrangement}
               onCheckTracks={(ids) => setCheckedIds(new Set(ids))}
             />
