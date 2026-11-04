@@ -962,10 +962,13 @@ body {
 }
 
 .track-dl {
+  display: inline-block;
+  box-sizing: border-box;
   flex-shrink: 0;
   width: 16px;
   height: 16px;
   padding: 0;
+  text-decoration: none;
   border: 1px solid var(--line);
   background: var(--bg-raised);
   color: var(--text-dim);
@@ -977,12 +980,12 @@ body {
   cursor: pointer;
 }
 
-.track-dl:hover:not(:disabled) {
+.track-dl:hover:not(.track-dl-off) {
   color: var(--text);
   border-color: var(--text-faint);
 }
 
-.track-dl:disabled {
+.track-dl-off {
   opacity: 0.4;
   cursor: not-allowed;
 }

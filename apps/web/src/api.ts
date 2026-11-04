@@ -191,6 +191,11 @@ export function trackStreamUrl(id: string) {
   return `${API_URL}/tracks/${id}/download`;
 }
 
+/** Link that makes the browser save the MP3 (streamed, with its own progress). */
+export function trackDownloadUrl(id: string) {
+  return `${trackStreamUrl(id)}?download=1`;
+}
+
 export const api = {
   me: () => request<User>("/auth/me"),
 
@@ -278,27 +283,4 @@ export const api = {
   deleteArrangement: (id: string) =>
     request<void>(`/arrangements/${id}`, { method: "DELETE" }),
 
-  downloadTrack: async (id: string, filename: string) => {
-    const res = await fetch(trackStreamUrl(id), {
-      credentials: "include",
-    });
-    if (!res.ok) {
-      if (res.status === 401) throw sessionLost();
-      let message = `Download failed (${res.status})`;
-      try {
-        const data = (await res.json()) as ErrorBody;
-        if (data.error) message = data.error;
-      } catch {
-        // ignore non-JSON error bodies
-      }
-      throw new Error(message);
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  },
 };
