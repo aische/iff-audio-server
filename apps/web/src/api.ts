@@ -79,6 +79,16 @@ export type Arrangement = {
 
 type ErrorBody = { error?: string };
 
+/** Failed API request; `status` is the HTTP status code. */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 /** Separators between comment tokens (kept by `split` so text round-trips). */
 export const TOKEN_SEP = /([^A-Za-z0-9#_:-]+)/;
 
@@ -181,7 +191,7 @@ async function request<T>(
       data && typeof data === "object" && "error" in data && data.error
         ? data.error
         : `Request failed (${res.status})`;
-    throw new Error(message);
+    throw new ApiError(message, res.status);
   }
 
   return data as T;
@@ -214,6 +224,9 @@ export const api = {
       json: { currentPassword, newPassword },
       allow401: true,
     }),
+
+  /** Change revision; it differs whenever shared data may have changed. */
+  getChanges: () => request<{ rev: string }>("/changes"),
 
   listTracks: () => request<Track[]>("/tracks"),
 

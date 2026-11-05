@@ -57,6 +57,13 @@
       "when": 1793636219466,
       "tag": "0007_shared_tags",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793874878214,
+      "tag": "0008_change_rev",
+      "breakpoints": true
     }
   ]
 }

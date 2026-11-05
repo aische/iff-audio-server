@@ -33,8 +33,10 @@ export function ArrangeEditor({
   arrangementId,
   user,
   tracks,
+  rev,
   active,
   onBack,
+  onGone,
   onOpen,
   onError,
   onAddApiChange,
@@ -47,8 +49,11 @@ export function ArrangeEditor({
   arrangementId: string;
   user: User;
   tracks: Track[];
+  rev: string | null;
   active: boolean;
   onBack: () => void;
+  /** The arrangement no longer exists (deleted by its owner). */
+  onGone: () => void;
   onOpen: (id: string) => void;
   onError: (message: string | null) => void;
   onAddApiChange: (api: ArrangeAddApi | null) => void;
@@ -59,7 +64,13 @@ export function ArrangeEditor({
   onArrangementPlayingChange: (playing: boolean) => void;
   stopToken: number;
 }) {
-  const doc = useArrangementDoc(arrangementId, user.id, onError);
+  const doc = useArrangementDoc(
+    arrangementId,
+    user.id,
+    onError,
+    rev,
+    onGone,
+  );
   const { arrangement, isOwner, clips, setClips } = doc;
   const transport = useArrangeTransport(clips, onError);
   const { playhead, segs, totalSec, headClipId, playing, soloClipId } =

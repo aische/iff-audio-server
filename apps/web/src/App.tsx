@@ -9,19 +9,15 @@ import {
   SESSION_EXPIRED_MESSAGE,
   api,
   setSessionLostHandler,
-  type Comment,
-  type Tag,
   type Track,
   type User,
 } from "./api";
 import { ArrangeShell, type ArrangeAddApi } from "./ArrangeView";
 import { newClipForTrack } from "./clips";
 import { TrackInspector } from "./TrackInspector";
-import {
-  TagManager,
-  type TagManagerActions,
-  type TrackTagActions,
-} from "./Tags";
+import { useChangeFeed } from "./useChangeFeed";
+import { useLibrary } from "./useLibrary";
+import { TagManager } from "./Tags";
 import Transport from "./Transport";
 import {
   ChangePasswordPanel,
@@ -194,9 +190,6 @@ function StudioShell({
   error: string | null;
   onError: (message: string | null) => void;
 }) {
-  const [tracks, setTracks] = useState<Track[]>([]);
-  const [tags, setTags] = useState<Tag[]>([]);
-  const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState<Track | null>(null);
   // Track of the clip selected in the open arrangement; the library
   // highlights it in arrange mode.
@@ -236,6 +229,19 @@ function StudioShell({
     seq: number;
   } | null>(null);
 
+  const rev = useChangeFeed();
+  const {
+    tracks,
+    tags,
+    loading,
+    patchTrack,
+    patchTrackComments,
+    tagActions,
+    tagManagerActions,
+  } = useLibrary(rev, onError, (fromId, toId) =>
+    setTagFilter((cur) => (cur === fromId ? toId : cur)),
+  );
+
   const splitCol = usePersistedWidth(
     SPLIT_W_KEY,
     SPLIT_W_DEFAULT,
@@ -256,32 +262,6 @@ function StudioShell({
     }
   }, []);
   useEffect(() => () => window.clearTimeout(hoverClearTimer.current), []);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const [rows, tagRows] = await Promise.all([
-          api.listTracks(),
-          api.listTags(),
-        ]);
-        if (!cancelled) {
-          setTracks(rows);
-          setTags(tagRows);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          onError(err instanceof Error ? err.message : "Failed to load tracks");
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [onError]);
 
   function setModePersist(next: AppMode) {
     setMode(next);
@@ -322,18 +302,6 @@ function StudioShell({
     persistSort(next);
   }
 
-  function patchTrack(trackId: string, patch: Partial<Track>) {
-    setTracks((prev) =>
-      prev.map((t) => (t.id === trackId ? { ...t, ...patch } : t)),
-    );
-  }
-
-  function patchTrackComments(trackId: string, next: Comment[]) {
-    setTracks((prev) =>
-      prev.map((t) => (t.id === trackId ? { ...t, comments: next } : t)),
-    );
-  }
-
   /** Play a track in the transport, or unload it if it is the current one. */
   function togglePlayTrack(track: Track) {
     if (playing?.id === track.id) {
@@ -358,96 +326,6 @@ function StudioShell({
   // A deleted or merged tag no longer filters anything.
   const activeTagFilter =
     tagFilter && tagsById.has(tagFilter) ? tagFilter : null;
-
-  function errorMessage(err: unknown, fallback: string) {
-    return err instanceof Error ? err.message : fallback;
-  }
-
-  const tagActions: TrackTagActions = {
-    onAdd: async (trackId, name) => {
-      try {
-        const { tag, link } = await api.addTrackTag(trackId, name);
-        setTags((prev) =>
-          prev.some((t) => t.id === tag.id) ? prev : [...prev, tag],
-        );
-        setTracks((prev) =>
-          prev.map((t) =>
-            t.id !== trackId || t.tags.some((l) => l.tagId === tag.id)
-              ? t
-              : { ...t, tags: [...t.tags, link] },
-          ),
-        );
-        onError(null);
-        return true;
-      } catch (err) {
-        onError(errorMessage(err, "Failed to add tag"));
-        return false;
-      }
-    },
-    onRemove: async (trackId, tagId) => {
-      try {
-        await api.removeTrackTag(trackId, tagId);
-        setTracks((prev) =>
-          prev.map((t) =>
-            t.id === trackId
-              ? { ...t, tags: t.tags.filter((l) => l.tagId !== tagId) }
-              : t,
-          ),
-        );
-        onError(null);
-      } catch (err) {
-        onError(errorMessage(err, "Failed to remove tag"));
-      }
-    },
-  };
-
-  const tagManagerActions: TagManagerActions = {
-    onUpdate: async (tagId, patch) => {
-      try {
-        const { tag, mergedFrom } = await api.updateTag(tagId, patch);
-        if (mergedFrom) {
-          // Links of the merged tag now point at the target (no duplicates).
-          setTracks((prev) =>
-            prev.map((t) => {
-              const from = t.tags.find((l) => l.tagId === mergedFrom);
-              if (!from) return t;
-              const rest = t.tags.filter((l) => l.tagId !== mergedFrom);
-              return rest.some((l) => l.tagId === tag.id)
-                ? { ...t, tags: rest }
-                : { ...t, tags: [...rest, { ...from, tagId: tag.id }] };
-            }),
-          );
-          if (tagFilter === mergedFrom) setTagFilter(tag.id);
-        }
-        setTags((prev) =>
-          prev
-            .filter((t) => t.id !== mergedFrom)
-            .map((t) => (t.id === tag.id ? tag : t)),
-        );
-        onError(null);
-        return true;
-      } catch (err) {
-        onError(errorMessage(err, "Failed to update tag"));
-        return false;
-      }
-    },
-    onDelete: async (tagId) => {
-      try {
-        await api.deleteTag(tagId);
-        setTags((prev) => prev.filter((t) => t.id !== tagId));
-        setTracks((prev) =>
-          prev.map((t) =>
-            t.tags.some((l) => l.tagId === tagId)
-              ? { ...t, tags: t.tags.filter((l) => l.tagId !== tagId) }
-              : t,
-          ),
-        );
-        onError(null);
-      } catch (err) {
-        onError(errorMessage(err, "Failed to delete tag"));
-      }
-    },
-  };
 
   const filtered = filterTracks({
     tracks,
@@ -738,6 +616,7 @@ function StudioShell({
             <ArrangeShell
               user={user}
               tracks={tracks}
+              rev={rev}
               active={mode === "arrange"}
               onError={onError}
               onAddApiChange={setArrangeApi}

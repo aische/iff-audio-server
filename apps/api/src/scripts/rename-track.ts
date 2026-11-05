@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { access } from "node:fs/promises";
 import dotenv from "dotenv";
 import { eq } from "drizzle-orm";
-import { createDb, tracks } from "@iff/db";
+import { bumpRev, createDb, tracks } from "@iff/db";
 import {
   assertBasename,
   isMp3Filename,
@@ -121,4 +121,6 @@ const [updated] = await db
   });
 
 console.log("Renamed track:", updated);
+// Tell open clients to refetch tracks.
+await bumpRev(db);
 process.exit(0);

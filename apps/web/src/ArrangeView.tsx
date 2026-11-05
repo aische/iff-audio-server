@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
 import { api, type ArrangementSummary, type Track, type User } from "./api";
 import { ArrangementListSection } from "./arrange/ArrangementList";
 import { ArrangeEditor, type ArrangeAddApi } from "./arrange/ArrangeEditor";
@@ -12,6 +12,7 @@ export type { ArrangeAddApi };
 export function ArrangeShell({
   user,
   tracks,
+  rev,
   active,
   onError,
   onAddApiChange,
@@ -24,6 +25,8 @@ export function ArrangeShell({
 }: {
   user: User;
   tracks: Track[];
+  /** Server change revision; the list and read-only arrangements refetch on change. */
+  rev: string | null;
   /** False while the panel is mounted but hidden (pool mode). */
   active: boolean;
   onError: (message: string | null) => void;
@@ -54,15 +57,21 @@ export function ArrangeShell({
   const [newName, setNewName] = useState("");
   const [copyingId, setCopyingId] = useState<string | null>(null);
 
-  function load() {
+  /**
+   * `background`: a reload because something changed. It leaves the error
+   * line alone (it may be telling the user why they were sent back here)
+   * and only reports a failure while nothing has loaded yet.
+   */
+  function load({ background = false } = {}) {
     return api
       .listArrangements()
       .then(
         (rows) => {
           setList(rows);
-          onError(null);
+          if (!background) onError(null);
         },
         (err: unknown) => {
+          if (background && !loading) return;
           onError(
             err instanceof Error ? err.message : "Failed to load arrangements",
           );
@@ -76,10 +85,12 @@ export function ArrangeShell({
     return load();
   }
 
+  // Load on mount and whenever the list is showing and something changed
+  // (including coming back from an arrangement). No "Loading…" flash.
+  const loadOnChange = useEffectEvent(() => void load({ background: true }));
   useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount
-  }, []);
+    if (!activeId) loadOnChange();
+  }, [rev, activeId]);
 
   // Report null API while list view is showing.
   useEffect(() => {
@@ -121,10 +132,12 @@ export function ArrangeShell({
         arrangementId={activeId}
         user={user}
         tracks={tracks}
+        rev={rev}
         active={active}
-        onBack={() => {
+        onBack={() => setActiveId(null)}
+        onGone={() => {
           setActiveId(null);
-          void refresh();
+          onError("That arrangement was deleted by its owner.");
         }}
         onOpen={setActiveId}
         onError={onError}

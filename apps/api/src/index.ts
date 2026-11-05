@@ -16,8 +16,10 @@ import dotenv from "dotenv";
 import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import {
   arrangements,
+  bumpRev,
   comments,
   createDb,
+  readRev,
   tags,
   trackTags,
   tracks,
@@ -64,6 +66,9 @@ await app.register(session, {
   cookieName: "iff_sid",
   // Only persist sessions that hold data (i.e. after login), not every probe/bot hit.
   saveUninitialized: false,
+  // Don't rewrite the session row on every request (each audio Range request,
+  // each poll); the auth hook renews it once it is past half its lifetime.
+  rolling: false,
   store: createSessionStore(db, {
     fallbackTtlMs: SESSION_TTL_MS,
     pruneIntervalMs: 60 * 60 * 1000,
@@ -131,6 +136,8 @@ function contentDisposition(
 declare module "fastify" {
   interface Session {
     userId?: string;
+    /** Last renewal (ms); changing it is what makes the plugin save the session. */
+    renewedAt?: number;
   }
   interface FastifyContextConfig {
     /** Reachable without a session. Every other route requires login. */
@@ -152,7 +159,25 @@ app.addHook("onRequest", async (request, reply) => {
   const userId = request.session.userId;
   if (!userId) return reply.code(401).send({ error: "unauthorized" });
   request.userId = userId;
+  renewSessionIfAging(request);
 });
+
+/**
+ * Slide the session forward once less than half its lifetime is left.
+ * On restore the plugin recomputes `cookie.expires` as now + maxAge; the
+ * stored expiry is in the untyped `originalExpires`. `touch()` alone doesn't
+ * mark the session modified (its hash ignores the cookie), so a data field
+ * changes too, which makes the plugin save the row and re-send the cookie.
+ */
+function renewSessionIfAging(request: FastifyRequest) {
+  const { originalExpires } = request.session.cookie as {
+    originalExpires?: Date;
+  };
+  if (!originalExpires) return;
+  if (originalExpires.getTime() - Date.now() >= SESSION_TTL_MS / 2) return;
+  request.session.touch();
+  request.session.renewedAt = Date.now();
+}
 
 // Validation errors → 400 with the ajv message; 5xx details stay in the log.
 app.setErrorHandler<FastifyError>((error, request, reply) => {
@@ -165,6 +190,22 @@ app.setErrorHandler<FastifyError>((error, request, reply) => {
     return reply.code(500).send({ error: "internal error" });
   }
   return reply.code(status).send({ error: error.message });
+});
+
+// Live updates: every successful write bumps the change revision, which
+// clients poll via GET /changes. Done here, before the response is sent, so a
+// poll right after a write already sees it; and centrally, so new routes
+// can't forget it. Auth routes change no shared data.
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+app.addHook("onSend", async (request, reply, payload) => {
+  if (
+    WRITE_METHODS.has(request.method) &&
+    reply.statusCode < 400 &&
+    !request.routeOptions.url?.startsWith("/auth/")
+  ) {
+    await bumpRev(db);
+  }
+  return payload;
 });
 
 const UUID_RE =
@@ -185,6 +226,9 @@ const passwordField = { type: "string", maxLength: 1024 };
 const arrangementName = { type: "string", maxLength: 200 };
 
 app.get("/health", { config: { public: true } }, async () => ({ ok: true }));
+
+/** Change revision; clients refetch their data when it differs. */
+app.get("/changes", async () => ({ rev: await readRev(db) }));
 
 app.post<{
   Body: { email?: string; password?: string };

@@ -2,7 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { eq, inArray } from "drizzle-orm";
-import { createDb, tracks } from "@iff/db";
+import { bumpRev, createDb, tracks } from "@iff/db";
 import {
   libraryFilePath,
   listLibraryMp3s,
@@ -126,6 +126,11 @@ if (needPeaks.length > 0) {
       }
     }
   }
+}
+
+// Tell open clients to refetch tracks.
+if (inserted + updated + markedMissing + peaksComputed > 0) {
+  await bumpRev(db);
 }
 
 console.log(
