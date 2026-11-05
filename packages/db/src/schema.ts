@@ -10,6 +10,7 @@ import {
   real,
   unique,
   primaryKey,
+  pgSequence,
 } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
@@ -143,3 +144,9 @@ export const sessions = pgTable("sessions", {
   data: jsonb("data").notNull(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 });
+
+/**
+ * Bumped after every write (API routes and library scripts). Clients poll
+ * its value and refetch when it changes; it carries no other meaning.
+ */
+export const changeRev = pgSequence("change_rev");

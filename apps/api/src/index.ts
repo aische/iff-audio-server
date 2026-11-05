@@ -16,8 +16,10 @@ import dotenv from "dotenv";
 import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import {
   arrangements,
+  bumpRev,
   comments,
   createDb,
+  readRev,
   tags,
   trackTags,
   tracks,
@@ -190,6 +192,22 @@ app.setErrorHandler<FastifyError>((error, request, reply) => {
   return reply.code(status).send({ error: error.message });
 });
 
+// Live updates: every successful write bumps the change revision, which
+// clients poll via GET /changes. Done here, before the response is sent, so a
+// poll right after a write already sees it; and centrally, so new routes
+// can't forget it. Auth routes change no shared data.
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+app.addHook("onSend", async (request, reply, payload) => {
+  if (
+    WRITE_METHODS.has(request.method) &&
+    reply.statusCode < 400 &&
+    !request.routeOptions.url?.startsWith("/auth/")
+  ) {
+    await bumpRev(db);
+  }
+  return payload;
+});
+
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -208,6 +226,9 @@ const passwordField = { type: "string", maxLength: 1024 };
 const arrangementName = { type: "string", maxLength: 200 };
 
 app.get("/health", { config: { public: true } }, async () => ({ ok: true }));
+
+/** Change revision; clients refetch their data when it differs. */
+app.get("/changes", async () => ({ rev: await readRev(db) }));
 
 app.post<{
   Body: { email?: string; password?: string };

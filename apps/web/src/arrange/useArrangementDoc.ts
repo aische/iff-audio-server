@@ -1,5 +1,10 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import { api, type Arrangement, type ArrangementClip } from "../api";
+import {
+  ApiError,
+  api,
+  type Arrangement,
+  type ArrangementClip,
+} from "../api";
 
 const AUTOSAVE_MS = 600;
 
@@ -13,11 +18,18 @@ function arrangementSnapshot(name: string, clips: ArrangementClip[]) {
  * One arrangement as an editable document: loads it, holds the local draft
  * (name + clips), and autosaves the owner's edits after a short debounce.
  * A save still pending when the editor closes is flushed on unmount.
+ *
+ * Someone else's arrangement (read-only here) is refetched whenever the
+ * server's change revision moves, so their edits show up live. The owner's
+ * own copy is never replaced: only the owner can write it.
  */
 export function useArrangementDoc(
   arrangementId: string,
   userId: string,
   onError: (message: string | null) => void,
+  rev: string | null,
+  /** The arrangement was deleted (404 on refresh). */
+  onGone: () => void,
 ) {
   const [arrangement, setArrangement] = useState<Arrangement | null>(null);
   const [clips, setClips] = useState<ArrangementClip[]>([]);
@@ -52,6 +64,34 @@ export function useArrangementDoc(
       cancelled = true;
     };
   }, [arrangementId, onError]);
+
+  // Read through effect events so the refresh effect runs only on `rev`.
+  const isReadOnlyLoaded = useEffectEvent(() => !!arrangement && !isOwner);
+  const applyRemote = useEffectEvent((row: Arrangement) => {
+    if (row.updatedAt === arrangement?.updatedAt) return;
+    savedSnapshotRef.current = arrangementSnapshot(row.name, row.clips);
+    setArrangement(row);
+    setClips(row.clips);
+    setName(row.name);
+  });
+  const reportGone = useEffectEvent(() => onGone());
+  useEffect(() => {
+    if (rev == null || !isReadOnlyLoaded()) return;
+    let cancelled = false;
+    api.getArrangement(arrangementId).then(
+      (row) => {
+        if (!cancelled) applyRemote(row);
+      },
+      (err: unknown) => {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 404) reportGone();
+        // Other failures: keep what we show; the next change retries.
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [rev, arrangementId]);
 
   const persist = useEffectEvent(
     async (nextName: string, nextClips: ArrangementClip[]) => {

@@ -228,6 +228,10 @@ export function Sequence({
                 onToggleSkip={() => onToggleSkip(clip.instanceId)}
                 onPlay={() => onPlayClip(clip.instanceId)}
                 onRemove={() => onRemove(clip.instanceId)}
+                clipCount={clips.length}
+                onMove={(insertIndex) =>
+                  onMoveClip(clip.instanceId, insertIndex)
+                }
                 onDragStart={() => setDragClipId(clip.instanceId)}
                 onDragEnd={clearDrag}
               />
@@ -265,6 +269,8 @@ function SequenceRow({
   onToggleSkip,
   onPlay,
   onRemove,
+  clipCount,
+  onMove,
   onDragStart,
   onDragEnd,
 }: {
@@ -284,9 +290,21 @@ function SequenceRow({
   onToggleSkip: () => void;
   onPlay: () => void;
   onRemove: () => void;
+  clipCount: number;
+  /** Move this clip to an insert slot (0 = before the first clip). */
+  onMove: (insertIndex: number) => void;
   onDragStart: () => void;
   onDragEnd: () => void;
 }) {
+  const isFirst = index === 0;
+  const isLast = index === clipCount - 1;
+  // Menu alternative to drag-to-reorder, which touch browsers handle poorly.
+  const moves: { label: string; insertIndex: number; disabled: boolean }[] = [
+    { label: "Move up", insertIndex: index - 1, disabled: isFirst },
+    { label: "Move down", insertIndex: index + 2, disabled: isLast },
+    { label: "Move to top", insertIndex: 0, disabled: isFirst },
+    { label: "Move to bottom", insertIndex: clipCount, disabled: isLast },
+  ];
   const releasedOn = track?.releasedOn ?? null;
   const dur = clipDuration(clip);
   const title = track ? shortTitle(track.filename) : "?";
@@ -389,17 +407,35 @@ function SequenceRow({
         {isOwner && (
           <Menu label="⋯" title="Clip actions" buttonClassName="arr-row-btn">
             {(close) => (
-              <button
-                type="button"
-                role="menuitem"
-                className="arr-menu-item arr-menu-danger"
-                onClick={() => {
-                  close();
-                  onRemove();
-                }}
-              >
-                Remove from arrangement
-              </button>
+              <>
+                {moves.map((m) => (
+                  <button
+                    key={m.label}
+                    type="button"
+                    role="menuitem"
+                    className="arr-menu-item"
+                    disabled={m.disabled}
+                    onClick={() => {
+                      close();
+                      onMove(m.insertIndex);
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+                <div className="arr-menu-sep" role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="arr-menu-item arr-menu-danger"
+                  onClick={() => {
+                    close();
+                    onRemove();
+                  }}
+                >
+                  Remove from arrangement
+                </button>
+              </>
             )}
           </Menu>
         )}
