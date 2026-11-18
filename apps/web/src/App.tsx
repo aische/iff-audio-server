@@ -190,6 +190,8 @@ function StudioShell({
   error: string | null;
   onError: (message: string | null) => void;
 }) {
+  // Library transport only. Independent of search/filter/focus: query may
+  // hide this track from the list without stopping playback (see better-ux.md).
   const [playing, setPlaying] = useState<Track | null>(null);
   // Track of the clip selected in the open arrangement; the library
   // highlights it in arrange mode.
@@ -312,6 +314,14 @@ function StudioShell({
     setPlaying(track);
   }
 
+  /** Bring the playing track back into the list without stopping audio. */
+  function revealPlayingInList() {
+    setSearch("");
+    setFilter("all");
+    setTagFilter(null);
+    setHideReleasedPersist(false);
+  }
+
   function onArrangementPlayingChange(playingArr: boolean) {
     if (playingArr) setPlaying(null);
   }
@@ -338,6 +348,13 @@ function StudioShell({
     tagsById,
   });
   const visible = sortTracks(filtered, sort);
+  // Prefer live library row so transport title/duration stay fresh; keep the
+  // snapshot if the file vanished from the DB mid-play.
+  const playingTrack = playing
+    ? (tracks.find((t) => t.id === playing.id) ?? playing)
+    : null;
+  const playingHiddenByFilters =
+    playingTrack != null && !visible.some((t) => t.id === playingTrack.id);
   // Looked up in all tracks: arrangement clips may be filtered out of the list.
   const inspected = hoveredId
     ? (tracks.find((t) => t.id === hoveredId) ?? null)
@@ -508,9 +525,11 @@ function StudioShell({
         </div>
 
         <Transport
-          track={playing}
+          track={playingTrack}
+          hiddenByFilters={playingHiddenByFilters}
+          onRevealInList={revealPlayingInList}
           onEnded={() => {
-            /* keep last track selected in transport */
+            /* keep last track loaded in transport */
           }}
         />
 
@@ -565,7 +584,7 @@ function StudioShell({
               tracks={visible}
               user={user}
               mode={mode}
-              playingId={playing?.id ?? null}
+              playingId={playingTrack?.id ?? null}
               selectedId={mode === "arrange" ? arrangeSelectedTrackId : null}
               checks={checks}
               showOthers={showOthers}

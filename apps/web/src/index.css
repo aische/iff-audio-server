@@ -410,6 +410,35 @@ body {
   min-width: 0;
 }
 
+.transport-hidden {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.transport-hidden-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.transport-reveal {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 7px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text-dim);
+}
+
+.transport-reveal:hover {
+  border-color: var(--play-line);
+  color: var(--play);
+  background: var(--play-soft);
+}
+
 .transport-time {
   font-family: var(--font-mono);
   font-size: 11px;
