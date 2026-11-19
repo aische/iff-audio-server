@@ -24,6 +24,8 @@ export type TransportProps = {
   onRevealInList?: () => void;
   /** Focus the playing track's comment field (dock only). */
   onComment?: () => void;
+  /** Shown in the dock while nothing is loaded (session resume). */
+  idle?: ReactNode;
 };
 
 const DOCK_WAVE_COLOR = "rgba(230, 226, 216, 0.42)";
@@ -38,11 +40,14 @@ export default function Transport({
   hiddenByFilters = false,
   onRevealInList,
   onComment,
+  idle,
 }: TransportProps) {
   if (!track) {
     return (
       <div className={`transport transport-empty transport-${variant}`}>
-        <span className="transport-placeholder">no track</span>
+        {(variant === "dock" && idle) || (
+          <span className="transport-placeholder">no track</span>
+        )}
       </div>
     );
   }

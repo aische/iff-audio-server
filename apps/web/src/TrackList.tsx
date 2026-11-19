@@ -41,6 +41,9 @@ import {
   type PoolSort,
   type SearchScope,
   type SortKey,
+  activeFilterLabels,
+  persistFiltersOpen,
+  readFiltersOpen,
   usePersistedWidth,
 } from "./uiPersist";
 
@@ -60,6 +63,8 @@ export type TrackListFilters = {
   searchScope: SearchScope;
   /** Global "edit tags" toggle: removal × on row chips. */
   tagEditing: boolean;
+  /** The tag manager panel is open. */
+  tagManagerOpen: boolean;
   visibleCount: number;
   visibleTotalSec: number;
   onFilter: (id: FilterId) => void;
@@ -67,6 +72,8 @@ export type TrackListFilters = {
   onSearch: (value: string) => void;
   onSearchScope: (scope: SearchScope) => void;
   onTagEditing: (value: boolean) => void;
+  /** Open or close the tag manager panel. */
+  onTagManager: () => void;
   onHideReleased: (value: boolean) => void;
   onShowOthers: (value: boolean) => void;
   onToggleSort: (key: SortKey) => void;
@@ -84,6 +91,12 @@ export type CheckedSummary = {
   /** Create an arrangement from the checked tracks; rejects on failure. */
   onCreateArrangement: (name: string) => Promise<void>;
 };
+
+/**
+ * One-shot request for a library row: open its comment field, or scroll it
+ * into view and give it focus. The row clears it once done.
+ */
+export type RowRequest = { id: string; kind: "comment" | "show" };
 
 /** Per-row checkbox state for the track list. */
 export type TrackChecks = {
@@ -187,6 +200,26 @@ function CheckedBar({ checked }: { checked: CheckedSummary }) {
   );
 }
 
+function DisclosureCaret({ open }: { open: boolean }) {
+  return (
+    <span className="disclosure-caret" aria-hidden="true">
+      {open ? "▾" : "▸"}
+    </span>
+  );
+}
+
+const FILTER_CHIPS = [
+  ["all", "all"],
+  ["commented", "commented"],
+  ["uncommented", "no comment from me"],
+] as const;
+
+/**
+ * Search, the visible count and the checked bar stay on one line; filters
+ * and tag editing sit behind two disclosures. While the filters are closed,
+ * a one-line summary names the active ones (hide-released is on by default,
+ * so a missing track always has a visible reason).
+ */
 export function FilterBar({
   filters,
   checked,
@@ -208,6 +241,7 @@ export function FilterBar({
     search,
     searchScope,
     tagEditing,
+    tagManagerOpen,
     visibleCount,
     visibleTotalSec,
     onFilter,
@@ -215,121 +249,205 @@ export function FilterBar({
     onSearch,
     onSearchScope,
     onTagEditing,
+    onTagManager,
     onHideReleased,
     onShowOthers,
   } = filters;
+  const [filtersOpen, setFiltersOpen] = useState(readFiltersOpen);
+  // Not persisted, like tag removal itself.
+  const [editOpen, setEditOpen] = useState(false);
   const tagName = tagFilter
     ? (tags.find((t) => t.id === tagFilter)?.name ?? null)
     : null;
+  const active = activeFilterLabels({ hideReleased, filter }, tagName);
+  const tagRemoval = mode === "pool" && tagEditing;
+
+  function toggleFilters() {
+    setFiltersOpen(!filtersOpen);
+    persistFiltersOpen(!filtersOpen);
+  }
 
   return (
-    <div className="filter-row">
-      {(
-        [
-          ["all", "all"],
-          ["commented", "commented"],
-        ] as const
-      ).map(([id, label]) => (
-        <button
-          key={id}
-          type="button"
-          className={
-            filter === id && !tagFilter
-              ? "filterButton filterSelected"
-              : "filterButton"
-          }
-          onClick={() => {
-            onFilter(id);
-            onTagFilter(null);
-          }}
-        >
-          {label}
-        </button>
-      ))}
-      <TagFilterSelect
-        tags={tags}
-        counts={tagCounts}
-        value={tagFilter}
-        onChange={onTagFilter}
-      />
-      {mode === "pool" && (
-        <button
-          type="button"
-          className={tagEditing ? "filterButton tagEditOn" : "filterButton"}
-          aria-pressed={tagEditing}
-          title={
-            tagEditing
-              ? "Tag removal is on: × on each tag removes it from that track for everyone — click to turn off"
-              : "Turn on to remove tags from tracks (shows × on each tag)"
-          }
-          onClick={() => onTagEditing(!tagEditing)}
-        >
-          {tagEditing ? "edit tags: on" : "edit tags"}
-        </button>
-      )}
-      <span className="search-box">
-        <input
-          type="search"
-          className={search ? "search-input search-active" : "search-input"}
-          value={search}
-          placeholder="search titles, tags, comments…"
-          aria-label="Search tracks"
-          onChange={(e) => onSearch(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") onSearch("");
-          }}
-        />
-        <button
-          type="button"
-          className="filterButton search-scope"
-          title={
-            searchScope === "mine"
-              ? "Search looks at your comments only — click to include everyone's"
-              : "Search looks at everyone's comments — click for yours only"
-          }
-          onClick={() =>
-            onSearchScope(searchScope === "mine" ? "all" : "mine")
-          }
-        >
-          {searchScope === "mine" ? "my comments" : "all comments"}
-        </button>
-      </span>
-      <span className="filter-meta">
-        ({tagName ?? filter}) [{visibleCount} tracks ·{" "}
-        {formatDuration(Math.floor(visibleTotalSec))}]
-      </span>
-      {tagName && (
-        <button
-          type="button"
-          className="tagButton"
-          onClick={() => onTagFilter(null)}
-        >
-          clear {tagName}
-        </button>
-      )}
-      <button
-        type="button"
-        className={
-          hideReleased ? "filterButton filterSelected" : "filterButton"
-        }
-        onClick={() => onHideReleased(!hideReleased)}
-        title="Hide tracks that already have a release label"
-      >
-        {hideReleased ? "released hidden" : "released shown"}
-      </button>
-      {showOthersToggle && mode === "pool" && (
+    <div className="filter-bar">
+      <div className="filter-row">
+        <span className="search-box">
+          <input
+            type="search"
+            className={search ? "search-input search-active" : "search-input"}
+            value={search}
+            placeholder="search titles, tags, comments…"
+            aria-label="Search tracks"
+            onChange={(e) => onSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") onSearch("");
+            }}
+          />
+          {/* Scope only matters while there is something to search for. */}
+          {search && (
+            <button
+              type="button"
+              className="filterButton search-scope"
+              title={
+                searchScope === "mine"
+                  ? "Search looks at your comments only — click to include everyone's"
+                  : "Search looks at everyone's comments — click for yours only"
+              }
+              onClick={() =>
+                onSearchScope(searchScope === "mine" ? "all" : "mine")
+              }
+            >
+              {searchScope === "mine" ? "my comments" : "all comments"}
+            </button>
+          )}
+        </span>
         <button
           type="button"
           className={
-            showOthers ? "filterButton filterSelected" : "filterButton"
+            filtersOpen ? "filterButton disclosure open" : "filterButton disclosure"
           }
-          onClick={() => onShowOthers(!showOthers)}
-          title="Show other users' comments under each row"
+          aria-expanded={filtersOpen}
+          aria-controls="filter-panel"
+          title="Filters and view options"
+          onClick={toggleFilters}
         >
-          {showOthers ? "others on" : "others off"}
+          filter
+          <DisclosureCaret open={filtersOpen} />
         </button>
+        {!filtersOpen && active.length > 0 && (
+          <button
+            type="button"
+            className="filter-summary"
+            title="Active filters — click to change them"
+            onClick={toggleFilters}
+          >
+            <span className="filter-summary-label">filters:</span>{" "}
+            {active.join(" · ")}
+          </button>
+        )}
+        {tagName && (
+          <button
+            type="button"
+            className="tagButton"
+            onClick={() => onTagFilter(null)}
+          >
+            clear {tagName}
+          </button>
+        )}
+        <button
+          type="button"
+          className={
+            "filterButton disclosure" +
+            (editOpen ? " open" : "") +
+            (tagRemoval ? " tagEditOn" : "")
+          }
+          aria-expanded={editOpen}
+          aria-controls="edit-panel"
+          title={
+            tagRemoval
+              ? "Tag removal is on — open to turn it off or manage tags"
+              : "Tag editing and tag management"
+          }
+          onClick={() => setEditOpen(!editOpen)}
+        >
+          {tagRemoval ? "edit: removing tags" : "edit"}
+          <DisclosureCaret open={editOpen} />
+        </button>
+        <span className="filter-meta">
+          {visibleCount} tracks · {formatDuration(Math.floor(visibleTotalSec))}
+        </span>
+        <CheckedBar checked={checked} />
+      </div>
+
+      {filtersOpen && (
+        <div
+          className="filter-row filter-panel"
+          id="filter-panel"
+          role="group"
+          aria-label="Filters"
+        >
+          {FILTER_CHIPS.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={
+                filter === id && !tagFilter
+                  ? "filterButton filterSelected"
+                  : "filterButton"
+              }
+              onClick={() => {
+                onFilter(id);
+                onTagFilter(null);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+          <TagFilterSelect
+            tags={tags}
+            counts={tagCounts}
+            value={tagFilter}
+            onChange={onTagFilter}
+          />
+          <button
+            type="button"
+            className={
+              hideReleased ? "filterButton filterSelected" : "filterButton"
+            }
+            onClick={() => onHideReleased(!hideReleased)}
+            title="Hide tracks that already have a release label"
+          >
+            {hideReleased ? "released hidden" : "released shown"}
+          </button>
+          {showOthersToggle && mode === "pool" && (
+            <button
+              type="button"
+              className={
+                showOthers ? "filterButton filterSelected" : "filterButton"
+              }
+              onClick={() => onShowOthers(!showOthers)}
+              title="Show other users' comments under each row"
+            >
+              {showOthers ? "others on" : "others off"}
+            </button>
+          )}
+        </div>
       )}
-      <CheckedBar checked={checked} />
+
+      {editOpen && (
+        <div
+          className="filter-row filter-panel"
+          id="edit-panel"
+          role="group"
+          aria-label="Edit"
+        >
+          {mode === "pool" && (
+            <button
+              type="button"
+              className={tagEditing ? "filterButton tagEditOn" : "filterButton"}
+              aria-pressed={tagEditing}
+              title={
+                tagEditing
+                  ? "Tag removal is on: × on each tag removes it from that track for everyone — click to turn off"
+                  : "Turn on to remove tags from tracks (shows × on each tag)"
+              }
+              onClick={() => onTagEditing(!tagEditing)}
+            >
+              {tagEditing ? "edit tags: on" : "edit tags"}
+            </button>
+          )}
+          <button
+            type="button"
+            className={
+              tagManagerOpen ? "filterButton filterSelected" : "filterButton"
+            }
+            aria-pressed={tagManagerOpen}
+            title="Manage band tags: rename, merge, categorize, delete"
+            onClick={onTagManager}
+          >
+            manage tags
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -582,7 +700,7 @@ function TrackRow({
   focused,
   selected,
   checked,
-  focusComment,
+  request,
   showOthers,
   showComments,
   visibility,
@@ -593,7 +711,7 @@ function TrackRow({
   draggable,
   onTogglePlay,
   onToggleChecked,
-  onCommentFocused,
+  onRequestDone,
   onFocusRow,
   onHover,
   onTagClick,
@@ -610,8 +728,11 @@ function TrackRow({
   focused: boolean;
   selected: boolean;
   checked: boolean;
-  /** Scroll to and focus the comment field, then call onCommentFocused. */
-  focusComment: boolean;
+  /**
+   * One-shot: `comment` scrolls to and focuses the comment field, `show`
+   * scrolls the row into view and focuses it. Then calls onRequestDone.
+   */
+  request: RowRequest["kind"] | null;
   showOthers: boolean;
   showComments: boolean;
   visibility: RowVisibility;
@@ -622,7 +743,7 @@ function TrackRow({
   draggable: boolean;
   onTogglePlay: () => void;
   onToggleChecked: () => void;
-  onCommentFocused: () => void;
+  onRequestDone: () => void;
   /** Pointer down or keyboard focus anywhere in the row (pool mode). */
   onFocusRow: () => void;
   onHover: (hovered: boolean) => void;
@@ -645,16 +766,21 @@ function TrackRow({
   const commentInputRef = useRef<HTMLInputElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
 
-  const commentFocused = useEffectEvent(onCommentFocused);
+  const requestDone = useEffectEvent(onRequestDone);
   useEffect(() => {
-    if (!focusComment) return;
-    const input = commentInputRef.current;
-    if (input) {
-      input.scrollIntoView({ block: "nearest" });
-      input.focus();
+    if (!request) return;
+    if (request === "comment") {
+      const input = commentInputRef.current;
+      if (input) {
+        input.scrollIntoView({ block: "nearest" });
+        input.focus();
+      }
+    } else {
+      rowRef.current?.scrollIntoView({ block: "center" });
+      rowRef.current?.focus({ preventScroll: true });
     }
-    commentFocused();
-  }, [focusComment]);
+    requestDone();
+  }, [request]);
 
   useEffect(() => {
     const body = mine?.body ?? "";
@@ -913,8 +1039,8 @@ export function TrackList({
   playingId,
   focusedId,
   onFocusRow,
-  commentRequestId,
-  onCommentRequestDone,
+  rowRequest,
+  onRowRequestDone,
   selectedId,
   checks,
   showOthers,
@@ -943,8 +1069,9 @@ export function TrackList({
   focusedId: string | null;
   onFocusRow: (trackId: string) => void;
   /** Row whose comment field should take focus (dock "comment", `c`). */
-  commentRequestId: string | null;
-  onCommentRequestDone: () => void;
+  /** One-shot action on a row (see RowRequest). */
+  rowRequest: RowRequest | null;
+  onRowRequestDone: () => void;
   /** Track of the clip selected in the arrangement (highlighted), if any. */
   selectedId: string | null;
   checks: TrackChecks;
@@ -1073,8 +1200,8 @@ export function TrackList({
           focused={focusedId === track.id}
           selected={selectedId === track.id}
           checked={checks.checkedIds.has(track.id)}
-          focusComment={commentRequestId === track.id}
-          onCommentFocused={onCommentRequestDone}
+          request={rowRequest?.id === track.id ? rowRequest.kind : null}
+          onRequestDone={onRowRequestDone}
           onFocusRow={() => onFocusRow(track.id)}
           showOthers={showOthers}
           showComments={showComments}

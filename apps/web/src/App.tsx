@@ -9,6 +9,7 @@ import {
   SESSION_EXPIRED_MESSAGE,
   api,
   setSessionLostHandler,
+  type Comment,
   type Track,
   type User,
 } from "./api";
@@ -17,6 +18,7 @@ import { newClipForTrack } from "./clips";
 import { KeyMap } from "./KeyMap";
 import { usePlayback } from "./playback";
 import { PlaybackProvider } from "./PlaybackProvider";
+import { SessionResume } from "./SessionResume";
 import { TrackInspector } from "./TrackInspector";
 import { useChangeFeed } from "./useChangeFeed";
 import { useLibrary } from "./useLibrary";
@@ -28,6 +30,7 @@ import {
   FilterBar,
   TrackList,
   type CheckedSummary,
+  type RowRequest,
   type TrackChecks,
 } from "./TrackList";
 import {
@@ -37,12 +40,14 @@ import {
   SPLIT_W_MIN,
   filterTracks,
   persistHideReleased,
+  persistLastPlayed,
   persistMode,
   persistSearchScope,
   persistShowInspector,
   persistShowOthers,
   persistSort,
   readHideReleased,
+  readLastPlayed,
   readMode,
   readSearchScope,
   readShowInspector,
@@ -211,6 +216,11 @@ function StudioShell({
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const hoverClearTimer = useRef<number | undefined>(undefined);
   const [filter, setFilter] = useState<FilterId>("all");
+  // Rows commented on while "no comment from me" is on: they stay listed
+  // until the filter is chosen again (see TrackQuery.keepIds).
+  const [keptIds, setKeptIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [searchScope, setSearchScope] = useState(readSearchScope);
@@ -242,11 +252,14 @@ function StudioShell({
   } | null>(null);
   // Pool mode: the track being edited / inspected. Separate from playing and
   // from hover; never follows play (see better-ux.md, "parallel work").
-  // Kept while the query hides its row; in memory only.
-  const [focusedId, setFocusedId] = useState<string | null>(null);
-  // One-shot "open this row's comment field": the row focuses its comment
-  // input, then clears the request. Always paired with focus (openComment).
-  const [commentRequest, setCommentRequest] = useState<string | null>(null);
+  // Kept while the query hides its row; in memory only. Session resume:
+  // starts on the last played track (focused, not played).
+  const [focusedId, setFocusedId] = useState(readLastPlayed);
+  // Last library track played in this browser; the idle dock offers it.
+  const [lastPlayedId, setLastPlayedId] = useState(readLastPlayed);
+  // One-shot row action (open its comment field / scroll to it); the row
+  // clears it when done. Always paired with focus.
+  const [rowRequest, setRowRequest] = useState<RowRequest | null>(null);
 
   const rev = useChangeFeed();
   const {
@@ -321,14 +334,33 @@ function StudioShell({
     persistSort(next);
   }
 
+  function selectFilter(next: FilterId) {
+    setFilter(next);
+    setKeptIds(new Set());
+  }
+
+  function onCommentsChange(trackId: string, next: Comment[]) {
+    if (filter === "uncommented") {
+      setKeptIds((prev) => new Set(prev).add(trackId));
+    }
+    patchTrackComments(trackId, next);
+  }
+
+  /** Load and play a library track (stops the arrangement). */
+  function playTrack(track: Track) {
+    setStopToken((n) => n + 1);
+    playback.play(track);
+    setLastPlayedId(track.id);
+    persistLastPlayed(track.id);
+  }
+
   /** Play a track in the transport, or unload it if it is the current one. */
   function togglePlayTrack(track: Track) {
     if (playback.track?.id === track.id) {
       playback.stop();
       return;
     }
-    setStopToken((n) => n + 1);
-    playback.play(track);
+    playTrack(track);
   }
 
   function onArrangementPlayingChange(playingArr: boolean) {
@@ -354,6 +386,7 @@ function StudioShell({
     searchScope,
     userId: user.id,
     tagsById,
+    keepIds: keptIds,
   };
   const filtered = filterTracks(tracks, query);
   const visible = sortTracks(filtered, sort);
@@ -367,23 +400,26 @@ function StudioShell({
     playingTrack != null && !visible.some((t) => t.id === playingTrack.id);
 
   /**
-   * Bring the playing track back into the list without stopping audio.
-   * Clears only the parts of the query that hide it. Hide-released is turned
-   * off for this session only; the saved preference is left as it is.
+   * Bring a track back into the list without touching playback. Clears only
+   * the parts of the query that hide it. Hide-released is turned off for
+   * this session only; the saved preference is left as it is.
    */
-  function revealPlayingInList() {
-    if (!playingTrack) return;
-    const hidden = trackHiddenBy(playingTrack, query);
+  function revealInList(track: Track) {
+    const hidden = trackHiddenBy(track, query);
     if (hidden.search) setSearch("");
-    if (hidden.filter) setFilter("all");
+    if (hidden.filter) selectFilter("all");
     if (hidden.tag) setTagFilter(null);
     if (hidden.released) setHideReleased(false);
+  }
+
+  function revealPlayingInList() {
+    if (playingTrack) revealInList(playingTrack);
   }
 
   /** Focus a row and open its comment field (the row must be in the list). */
   function openComment(id: string) {
     setFocusedId(id);
-    setCommentRequest(id);
+    setRowRequest({ id, kind: "comment" });
   }
 
   /** Focus the playing track's comment field, revealing its row if hidden. */
@@ -391,6 +427,34 @@ function StudioShell({
     if (!playingTrack) return;
     if (playingHiddenByFilters) revealPlayingInList();
     openComment(playingTrack.id);
+  }
+
+  /** Focus a row and scroll it into view, revealing it if hidden. */
+  function showInList(track: Track) {
+    revealInList(track);
+    setFocusedId(track.id);
+    setRowRequest({ id: track.id, kind: "show" });
+  }
+
+  // Session resume (idle dock): the last played track, and the tracks still
+  // waiting for this user's comment, counted as the "no comment from me"
+  // filter would list them (so the number matches the list it opens).
+  const lastPlayed = lastPlayedId
+    ? (tracks.find((t) => t.id === lastPlayedId && t.present) ?? null)
+    : null;
+  const waitingCount = filterTracks(tracks, {
+    ...query,
+    filter: "uncommented",
+    tagFilter: null,
+    search: "",
+    keepIds: undefined,
+  }).length;
+  const waitingShown = filter === "uncommented" && !activeTagFilter && !search;
+
+  function showWaiting() {
+    selectFilter("uncommented");
+    setTagFilter(null);
+    setSearch("");
   }
   // Keys act on the focused row only while the query shows it.
   const focusedVisible = focusedId
@@ -428,8 +492,7 @@ function StudioShell({
         if (!playback.isPlaying) playback.togglePause();
         return;
       }
-      setStopToken((n) => n + 1);
-      playback.play(t);
+      playTrack(t);
     },
     togglePause: playback.togglePause,
     commentFocused() {
@@ -522,13 +585,15 @@ function StudioShell({
     search,
     searchScope,
     tagEditing,
+    tagManagerOpen: tagsOpen,
     visibleCount: visible.length,
     visibleTotalSec,
-    onFilter: setFilter,
+    onFilter: selectFilter,
     onTagFilter: setTagFilter,
     onSearch: setSearch,
     onSearchScope: setSearchScopePersist,
     onTagEditing: setTagEditing,
+    onTagManager: () => setTagsOpen((v) => !v),
     onHideReleased: setHideReleasedPersist,
     onShowOthers: setShowOthersPersist,
     onToggleSort: toggleSort,
@@ -596,17 +661,6 @@ function StudioShell({
             >
               info
             </button>
-            <button
-              type="button"
-              className={
-                tagsOpen ? "filterButton filterSelected" : "filterButton"
-              }
-              aria-pressed={tagsOpen}
-              title="Manage band tags: rename, merge, categorize, delete"
-              onClick={() => setTagsOpen((v) => !v)}
-            >
-              tags
-            </button>
             <span className="user-email">{user.email}</span>
             <button
               type="button"
@@ -640,6 +694,16 @@ function StudioShell({
           hiddenByFilters={playingHiddenByFilters}
           onRevealInList={revealPlayingInList}
           onComment={canCommentOnPlaying ? commentOnPlaying : undefined}
+          idle={
+            <SessionResume
+              lastPlayed={lastPlayed}
+              waitingCount={waitingCount}
+              waitingShown={waitingShown}
+              onPlay={playTrack}
+              onShow={showInList}
+              onShowWaiting={showWaiting}
+            />
+          }
         />
 
         <div className="toolbar">
@@ -700,8 +764,8 @@ function StudioShell({
               playingId={playingTrack?.id ?? null}
               focusedId={mode === "pool" ? focusedId : null}
               onFocusRow={setFocusedId}
-              commentRequestId={commentRequest}
-              onCommentRequestDone={() => setCommentRequest(null)}
+              rowRequest={rowRequest}
+              onRowRequestDone={() => setRowRequest(null)}
               selectedId={mode === "arrange" ? arrangeSelectedTrackId : null}
               checks={checks}
               showOthers={showOthers}
@@ -719,7 +783,7 @@ function StudioShell({
               onHover={hoverTrack}
               onTagClick={setTagFilter}
               onToggleSort={toggleSort}
-              onCommentsChange={patchTrackComments}
+              onCommentsChange={onCommentsChange}
               onReleasedOnChange={(id, releasedOn) =>
                 patchTrack(id, { releasedOn })
               }

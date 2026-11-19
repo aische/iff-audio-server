@@ -25,6 +25,15 @@ export async function openLibrary(page: Page) {
   await expect(page.locator(".trackList")).toBeVisible();
 }
 
+/** Open the filter panel (filters sit behind a disclosure; idempotent). */
+export async function openFilters(page: Page) {
+  const button = page.getByRole("button", { name: "filter", exact: true });
+  if ((await button.getAttribute("aria-expanded")) !== "true") {
+    await button.click();
+  }
+  await expect(page.getByRole("group", { name: "Filters" })).toBeVisible();
+}
+
 /** Start a track with its row play button (the row must be visible). */
 export async function play(page: Page, filename: string) {
   await page.getByRole("button", { name: `Play ${filename}` }).click();

@@ -7,6 +7,7 @@ import {
   addTag,
   expect,
   expectPlaying,
+  openFilters,
   openLibrary,
   play,
   readStorage,
@@ -20,6 +21,7 @@ const HIDE_RELEASED_KEY = "iff-hide-released";
 
 test.beforeEach(async ({ page }) => {
   await openLibrary(page);
+  await openFilters(page);
 });
 
 test("search hides A: clears the search, keeps hide-released on", async ({

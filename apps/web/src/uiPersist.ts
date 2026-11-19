@@ -17,6 +17,8 @@ export const SPLIT_W_KEY = "iff-split-width";
 export const MODE_KEY = "iff-app-mode";
 export const SHOW_INSPECTOR_KEY = "iff-show-inspector";
 export const SEARCH_SCOPE_KEY = "iff-search-scope";
+export const FILTERS_OPEN_KEY = "iff-filters-open";
+export const LAST_PLAYED_KEY = "iff-last-played";
 
 // --- Column width defaults & bounds ---
 
@@ -34,7 +36,8 @@ export const SPLIT_W_MAX = 900;
 
 // --- Types ---
 
-export type FilterId = "all" | "commented";
+/** `uncommented`: tracks without a comment from the current user. */
+export type FilterId = "all" | "commented" | "uncommented";
 export type SortKey = "name" | "duration";
 export type SortDir = "asc" | "desc";
 export type PoolSort = { key: SortKey; dir: SortDir };
@@ -177,6 +180,31 @@ export function readSearchScope(): SearchScope {
   }
 }
 
+export function readFiltersOpen(): boolean {
+  try {
+    return localStorage.getItem(FILTERS_OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Id of the last library track played in this browser (session resume). */
+export function readLastPlayed(): string | null {
+  try {
+    return localStorage.getItem(LAST_PLAYED_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function persistLastPlayed(id: string) {
+  try {
+    localStorage.setItem(LAST_PLAYED_KEY, id);
+  } catch {
+    // ignore
+  }
+}
+
 export function persistSearchScope(scope: SearchScope) {
   try {
     localStorage.setItem(SEARCH_SCOPE_KEY, scope);
@@ -199,6 +227,10 @@ export function persistShowOthers(value: boolean) {
 
 export function persistHideReleased(value: boolean) {
   persistBool(HIDE_RELEASED_KEY, value, "1", "0");
+}
+
+export function persistFiltersOpen(value: boolean) {
+  persistBool(FILTERS_OPEN_KEY, value, "1", "0");
 }
 
 export function persistShowInspector(value: boolean) {
@@ -255,6 +287,12 @@ export type TrackQuery = {
   searchScope: SearchScope;
   userId: string;
   tagsById: ReadonlyMap<string, Tag>;
+  /**
+   * Kept by the `uncommented` filter although the user has commented on
+   * them: rows commented on while the filter is on, so a row does not
+   * vanish while its comment is being typed.
+   */
+  keepIds?: ReadonlySet<string>;
 };
 
 /** The parts of a query that hide a track; all false means it is shown. */
@@ -276,7 +314,12 @@ export type HiddenBy = {
 export function trackHiddenBy(track: Track, q: TrackQuery): HiddenBy {
   return {
     released: q.hideReleased && !!track.releasedOn,
-    filter: q.filter === "commented" && track.comments.length === 0,
+    filter:
+      q.filter === "commented"
+        ? track.comments.length === 0
+        : q.filter === "uncommented" &&
+          !q.keepIds?.has(track.id) &&
+          track.comments.some((c) => c.userId === q.userId),
     tag: !!q.tagFilter && !track.tags.some((l) => l.tagId === q.tagFilter),
     search: !matchesSearch(track, q),
   };
@@ -296,6 +339,19 @@ function matchesSearch(t: Track, q: TrackQuery): boolean {
     .join("\n")
     .toLowerCase();
   return terms.every((term) => haystack.includes(term));
+}
+
+/** One-line labels for the active parts of the query, search excluded. */
+export function activeFilterLabels(
+  q: Pick<TrackQuery, "hideReleased" | "filter">,
+  tagName: string | null,
+): string[] {
+  const labels: string[] = [];
+  if (q.hideReleased) labels.push("released hidden");
+  if (q.filter === "commented") labels.push("commented");
+  if (q.filter === "uncommented") labels.push("no comment from me");
+  if (tagName) labels.push(`#${tagName}`);
+  return labels;
 }
 
 /** Tracks shown by the query (see `trackHiddenBy`). */

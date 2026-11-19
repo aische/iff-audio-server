@@ -62,7 +62,10 @@ test("switching tracks and stopping from the row", async ({ page }) => {
   ).toBeVisible();
 
   await page.getByRole("button", { name: `Stop ${bravo}` }).click();
-  await expect(page.locator(".transport-placeholder")).toHaveText("no track");
+  // The idle dock offers the stopped track again instead of "no track".
+  await expect(page.locator(".transport-empty .resume-title")).toHaveText(
+    title(bravo),
+  );
   await expect
     .poll(() =>
       page.evaluate(

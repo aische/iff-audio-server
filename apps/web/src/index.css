@@ -201,11 +201,58 @@ body {
   padding: 4px 12px 8px;
 }
 
+.filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
 .filter-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+}
+
+/* Filter / Edit: secondary chrome behind two disclosures. */
+.disclosure-caret {
+  margin-left: 4px;
+  color: var(--text-faint);
+}
+
+.disclosure.open {
+  border-color: var(--text-faint);
+}
+
+.filter-panel {
+  padding: 4px 0 0 8px;
+  border-left: 1px solid var(--line);
+  margin-left: 2px;
+}
+
+/* One line naming the active filters while the panel is closed. */
+.filter-summary {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 2px 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.filter-summary:hover {
+  border-color: var(--accent-line);
+}
+
+.filter-summary-label {
+  color: var(--text-faint);
 }
 
 .filterButton {
@@ -377,6 +424,58 @@ body {
 .transport-placeholder {
   font-size: 12px;
   font-family: var(--font-mono);
+}
+
+/* Idle dock (pool): session resume. Quieter than a playing track. */
+.resume {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  color: var(--text-dim);
+}
+
+.resume-continue {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.resume-kicker {
+  color: var(--text-faint);
+}
+
+.resume-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: min(420px, 50vw);
+}
+
+.resume-action {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 7px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.resume-action:hover {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.resume-waiting-on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .transport-dock {

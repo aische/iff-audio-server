@@ -8,6 +8,7 @@ import {
   blur,
   expect,
   expectPlaying,
+  openFilters,
   openLibrary,
   play,
   row,
@@ -74,6 +75,7 @@ test("filtering A out of the list keeps it playing and offers to show it", async
   await expectPlaying(page, alpha);
 
   // alpha never gets a comment in these tests, so "commented" hides it.
+  await openFilters(page);
   await page.getByRole("button", { name: "commented", exact: true }).click();
   await expect(row(page, alpha)).toHaveCount(0);
   await expect(page.locator(".transport-hidden-label")).toHaveText(
