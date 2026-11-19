@@ -579,6 +579,7 @@ function TrackRow({
   user,
   mode,
   playing,
+  focused,
   selected,
   checked,
   focusComment,
@@ -593,6 +594,7 @@ function TrackRow({
   onTogglePlay,
   onToggleChecked,
   onCommentFocused,
+  onFocusRow,
   onHover,
   onTagClick,
   onCommentsChange,
@@ -604,6 +606,8 @@ function TrackRow({
   user: User;
   mode: AppMode;
   playing: boolean;
+  /** Pool mode: the row being edited / inspected (independent of playing). */
+  focused: boolean;
   selected: boolean;
   checked: boolean;
   /** Scroll to and focus the comment field, then call onCommentFocused. */
@@ -619,6 +623,8 @@ function TrackRow({
   onTogglePlay: () => void;
   onToggleChecked: () => void;
   onCommentFocused: () => void;
+  /** Pointer down or keyboard focus anywhere in the row (pool mode). */
+  onFocusRow: () => void;
   onHover: (hovered: boolean) => void;
   onTagClick: (tagId: string) => void;
   onCommentsChange: (comments: Comment[]) => void;
@@ -626,6 +632,7 @@ function TrackRow({
   onAddToArrangement?: (trackId: string) => void;
   onError: (message: string | null) => void;
 }) {
+  const pool = mode === "pool";
   const mine = track.comments.find((c) => c.userId === user.id);
   const others = track.comments.filter((c) => c.userId !== user.id);
   const [draft, setDraft] = useState(mine?.body ?? "");
@@ -704,12 +711,21 @@ function TrackRow({
         "track1",
         mode === "arrange" ? "track1-compact" : "",
         playing ? "track-playing" : "",
+        focused ? "track-focused" : "",
         selected ? "track-selected" : "",
         checked && track.present ? "track-checked" : "",
         !track.present ? "track-missing" : "",
       ]
         .filter(Boolean)
         .join(" ")}
+      data-track-id={track.id}
+      // Pool rows can hold keyboard focus themselves (j/k, enter, esc).
+      tabIndex={pool ? -1 : undefined}
+      // Capture phase: controls in the row stop propagation of their own
+      // events, but clicking any of them still focuses the row. Focusing
+      // never changes what is playing.
+      onPointerDownCapture={pool ? onFocusRow : undefined}
+      onFocusCapture={pool ? onFocusRow : undefined}
       draggable={draggable}
       onDragStart={(e) => {
         if (!draggable) {
@@ -885,6 +901,8 @@ export function TrackList({
   user,
   mode,
   playingId,
+  focusedId,
+  onFocusRow,
   commentRequestId,
   onCommentRequestDone,
   selectedId,
@@ -911,7 +929,10 @@ export function TrackList({
   user: User;
   mode: AppMode;
   playingId: string | null;
-  /** Row whose comment field should take focus (dock "comment"). */
+  /** Focused row (pool mode only; null in arrange mode). */
+  focusedId: string | null;
+  onFocusRow: (trackId: string) => void;
+  /** Row whose comment field should take focus (dock "comment", `c`). */
   commentRequestId: string | null;
   onCommentRequestDone: () => void;
   /** Track of the clip selected in the arrangement (highlighted), if any. */
@@ -1039,10 +1060,12 @@ export function TrackList({
           user={user}
           mode={mode}
           playing={playingId === track.id}
+          focused={focusedId === track.id}
           selected={selectedId === track.id}
           checked={checks.checkedIds.has(track.id)}
           focusComment={commentRequestId === track.id}
           onCommentFocused={onCommentRequestDone}
+          onFocusRow={() => onFocusRow(track.id)}
           showOthers={showOthers}
           showComments={showComments}
           visibility={visibility}

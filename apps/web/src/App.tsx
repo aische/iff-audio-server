@@ -236,8 +236,12 @@ function StudioShell({
     id: string;
     seq: number;
   } | null>(null);
-  // "Comment on what's playing": the row focuses its comment field, then
-  // clears the request.
+  // Pool mode: the track being edited / inspected. Separate from playing and
+  // from hover; never follows play (see better-ux.md, "parallel work").
+  // Kept while the query hides its row; in memory only.
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  // One-shot "open this row's comment field": the row focuses its comment
+  // input, then clears the request. Always paired with focus (openComment).
   const [commentRequest, setCommentRequest] = useState<string | null>(null);
 
   const rev = useChangeFeed();
@@ -372,20 +376,29 @@ function StudioShell({
     if (hidden.released) setHideReleased(false);
   }
 
+  /** Focus a row and open its comment field (the row must be in the list). */
+  function openComment(id: string) {
+    setFocusedId(id);
+    setCommentRequest(id);
+  }
+
   /** Focus the playing track's comment field, revealing its row if hidden. */
   function commentOnPlaying() {
     if (!playingTrack) return;
     if (playingHiddenByFilters) revealPlayingInList();
-    setCommentRequest(playingTrack.id);
+    openComment(playingTrack.id);
   }
   // The comment field needs a row in the library (not a vanished file).
   const canCommentOnPlaying =
     mode === "pool" &&
     playingTrack != null &&
     tracks.some((t) => t.id === playingTrack.id);
-  // Looked up in all tracks: arrangement clips may be filtered out of the list.
-  const inspected = hoveredId
-    ? (tracks.find((t) => t.id === hoveredId) ?? null)
+  // Hover wins while the pointer is on a track; otherwise (pool mode) the
+  // focused track. Never the playing track as such. Looked up in all
+  // tracks: arrangement clips may be filtered out of the list.
+  const inspectedId = hoveredId ?? (mode === "pool" ? focusedId : null);
+  const inspected = inspectedId
+    ? (tracks.find((t) => t.id === inspectedId) ?? null)
     : null;
   const visibleTotalSec = visible.reduce(
     (sum, t) => sum + (t.durationSeconds ?? 0),
@@ -612,6 +625,8 @@ function StudioShell({
               user={user}
               mode={mode}
               playingId={playingTrack?.id ?? null}
+              focusedId={mode === "pool" ? focusedId : null}
+              onFocusRow={setFocusedId}
               commentRequestId={commentRequest}
               onCommentRequestDone={() => setCommentRequest(null)}
               selectedId={mode === "arrange" ? arrangeSelectedTrackId : null}

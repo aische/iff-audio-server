@@ -946,6 +946,24 @@ body {
   box-shadow: inset 3px 0 0 var(--play);
 }
 
+/*
+ * Focused (pool mode): what is being edited / inspected. An outline, so it
+ * can sit on the playing row (green bar) or any other row. The row's own
+ * DOM focus ring is replaced by this.
+ */
+.track1:focus {
+  outline: none;
+}
+
+.track1.track-focused {
+  outline: 1px solid var(--accent-line);
+  outline-offset: -1px;
+}
+
+.track1.track-focused .input_box1 input:not(:focus) {
+  border-color: var(--accent-line);
+}
+
 .track1.track-selected:not(.track-playing) {
   background: var(--accent-soft);
   box-shadow: inset 3px 0 0 var(--accent);
