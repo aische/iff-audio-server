@@ -36,6 +36,15 @@ export const TRACKS = {
 export const RELEASED_LABEL = "EP1";
 
 /**
+ * Short filler tracks so the list is longer than the screen (row waveforms
+ * load only for rows on screen). Named to sort after the tracks above.
+ */
+export const FILLER_COUNT = 40;
+export function fillerName(n: number) {
+  return `filler-${String(n).padStart(2, "0")}.mp3`;
+}
+
+/**
  * Database URL for the tests: E2E_DATABASE_URL, or the dev DATABASE_URL from
  * the root .env with the database name replaced by `iff_e2e`. The dev data
  * is never touched.

@@ -12,11 +12,13 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import {
+  FILLER_COUNT,
   RELEASED_LABEL,
   TRACKS,
   USERS,
   apiEnv,
   e2eDatabaseUrl,
+  fillerName,
   libraryDir,
   repoRoot,
 } from "./env.ts";
@@ -50,24 +52,34 @@ async function migrateDatabase() {
   }
 }
 
-/** 40 s sine tones, one pitch per track; long enough to outlast a test. */
+function sineTone(filename: string, frequency: number, seconds: number) {
+  execFileSync(
+    "ffmpeg",
+    [
+      "-loglevel", "error",
+      "-f", "lavfi",
+      "-i", `sine=frequency=${frequency}:duration=${seconds}`,
+      "-ac", "1",
+      "-b:a", "64k",
+      path.join(libraryDir, filename),
+    ],
+    { stdio: "inherit" },
+  );
+}
+
+/**
+ * 40 s sine tones, one pitch per named track (long enough to outlast a
+ * test), plus short filler tracks that make the list scroll.
+ */
 function generateLibrary() {
   fs.rmSync(libraryDir, { recursive: true, force: true });
   fs.mkdirSync(libraryDir, { recursive: true });
   Object.values(TRACKS).forEach((filename, i) => {
-    execFileSync(
-      "ffmpeg",
-      [
-        "-loglevel", "error",
-        "-f", "lavfi",
-        "-i", `sine=frequency=${220 * (i + 1)}:duration=40`,
-        "-ac", "1",
-        "-b:a", "64k",
-        path.join(libraryDir, filename),
-      ],
-      { stdio: "inherit" },
-    );
+    sineTone(filename, 220 * (i + 1), 40);
   });
+  for (let n = 1; n <= FILLER_COUNT; n++) {
+    sineTone(fillerName(n), 300 + 10 * n, 2);
+  }
 }
 
 function runApiScript(script: string, args: string[], input?: string) {
@@ -97,4 +109,4 @@ for (const u of Object.values(USERS)) {
   runApiScript("create-user", [u.email], `${u.password}\n`);
 }
 await markReleased();
-console.log(`e2e: prepared ${dbName} with ${Object.keys(TRACKS).length} tracks`);
+console.log(`e2e: prepared ${dbName} with ${Object.keys(TRACKS).length + FILLER_COUNT} tracks`);

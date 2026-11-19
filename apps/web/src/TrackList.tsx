@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useEffectEvent,
   useRef,
@@ -16,6 +17,10 @@ import {
 } from "./api";
 import { formatDuration, shortTitle } from "./format";
 import { TRACK_MIME } from "./mime";
+import { usePeaks } from "./peaks";
+import { PeaksCanvas } from "./PeaksCanvas";
+import { playedFraction, usePlayback, usePlaybackFrame } from "./playback";
+import { RowVisibility } from "./rowVisibility";
 import {
   TagFilterSelect,
   TagNamesDatalist,
@@ -492,6 +497,83 @@ function ReleaseLabel({
   );
 }
 
+const ROW_WAVE_COLOR = "rgba(230, 226, 216, 0.32)";
+const ROW_WAVE_PLAYING_COLOR = "rgba(140, 193, 82, 0.75)";
+
+/**
+ * Compact waveform for a library row. Peaks load only once the row comes on
+ * screen (shared observer), and stay cached (peaks.ts).
+ */
+function RowWaveform({
+  track,
+  playing,
+  visibility,
+}: {
+  track: Track;
+  playing: boolean;
+  visibility: RowVisibility;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [seen, setSeen] = useState(false);
+  const rec = usePeaks(track.id, seen);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (seen || !el) return;
+    return visibility.observe(el, () => setSeen(true));
+  }, [seen, visibility]);
+
+  return (
+    <div ref={ref} className="row-wave">
+      {rec ? (
+        <PeaksCanvas
+          rec={rec}
+          color={playing ? ROW_WAVE_PLAYING_COLOR : ROW_WAVE_COLOR}
+          className="row-wave-canvas"
+        />
+      ) : (
+        <div className="wave-flat" aria-hidden />
+      )}
+      {playing && (
+        <RowPlayhead
+          duration={track.durationSeconds ?? rec?.durationSec ?? null}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Playhead on the playing row; only this component follows the time, and it
+ * draws via a ref. Clicking seeks (this row is what is playing, so seeking
+ * never changes the track).
+ */
+function RowPlayhead({ duration }: { duration: number | null }) {
+  const playback = usePlayback();
+  const headRef = useRef<HTMLDivElement>(null);
+  const total = playback.duration ?? duration;
+
+  usePlaybackFrame((sec) => {
+    if (headRef.current) {
+      headRef.current.style.transform = `translateX(${playedFraction(sec, total) * 100}%)`;
+    }
+  });
+
+  return (
+    <div
+      className="row-wave-seek"
+      title="Seek"
+      onClick={(e) => {
+        if (!total) return;
+        const box = e.currentTarget.getBoundingClientRect();
+        playback.seek(((e.clientX - box.left) / box.width) * total);
+      }}
+    >
+      <div ref={headRef} className="wave-playhead row-wave-playhead" />
+    </div>
+  );
+}
+
 function TrackRow({
   track,
   user,
@@ -502,6 +584,7 @@ function TrackRow({
   focusComment,
   showOthers,
   showComments,
+  visibility,
   tagFilter,
   tagsById,
   tagActions,
@@ -527,6 +610,7 @@ function TrackRow({
   focusComment: boolean;
   showOthers: boolean;
   showComments: boolean;
+  visibility: RowVisibility;
   tagFilter: string | null;
   tagsById: ReadonlyMap<string, Tag>;
   tagActions: TrackTagActions;
@@ -690,6 +774,13 @@ function TrackRow({
           {shortTitle(track.filename)}
           {!track.present && " (missing)"}
         </span>
+        {showComments && (
+          <RowWaveform
+            track={track}
+            playing={playing}
+            visibility={visibility}
+          />
+        )}
       </div>
       {showComments && (
         <div className="trackBox2">
@@ -859,6 +950,17 @@ export function TrackList({
     COMMENT_W_MAX,
   );
 
+  // Rows load their waveform peaks only when near the screen.
+  const [visibility] = useState(() => new RowVisibility());
+  const listRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (!el) return;
+      visibility.attach(el.closest(".studio-left"));
+      return () => visibility.detach();
+    },
+    [visibility],
+  );
+
   const colStyle = {
     "--title-w": `${titleCol.width}px`,
     "--comment-w": `${commentCol.width}px`,
@@ -876,7 +978,7 @@ export function TrackList({
   }
 
   return (
-    <div className="trackList" style={colStyle}>
+    <div ref={listRef} className="trackList" style={colStyle}>
       <TagNamesDatalist tags={tags} />
       <div className="col-header">
         <div className="trackBox1">
@@ -896,6 +998,7 @@ export function TrackList({
             sort={sort}
             onToggle={onToggleSort}
           />
+          {showComments && <span className="row-wave-spacer" aria-hidden />}
         </div>
         <div
           className="col-resize"
@@ -942,6 +1045,7 @@ export function TrackList({
           onCommentFocused={onCommentRequestDone}
           showOthers={showOthers}
           showComments={showComments}
+          visibility={visibility}
           tagFilter={tagFilter}
           tagsById={tagsById}
           tagActions={tagActions}
