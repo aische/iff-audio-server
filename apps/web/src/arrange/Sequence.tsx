@@ -191,7 +191,7 @@ export function Sequence({
         >
           {isOwner
             ? "Drag tracks from the library (or double-click) to build the sequence."
-            : "This arrangement has no clips."}
+            : "This subset has no clips."}
         </div>
       ) : (
         <div
@@ -433,7 +433,7 @@ function SequenceRow({
                     onRemove();
                   }}
                 >
-                  Remove from arrangement
+                  Remove from subset
                 </button>
               </>
             )}

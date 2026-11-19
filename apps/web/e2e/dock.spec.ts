@@ -85,7 +85,7 @@ test("in arrange mode the dock is one compact line", async ({ page }) => {
   await play(page, alpha);
   await expectPlaying(page, alpha);
 
-  await page.getByRole("button", { name: "Arrange", exact: true }).click();
+  await page.getByRole("button", { name: "Subsets", exact: true }).click();
   await expect(page.locator(".transport-compact")).toBeVisible();
   await expect(page.getByRole("region", { name: "Now playing" })).toHaveCount(
     0,
@@ -94,7 +94,7 @@ test("in arrange mode the dock is one compact line", async ({ page }) => {
   await expect(page.locator(".transport-comment")).toHaveCount(0);
   await expectPlaying(page, alpha);
 
-  await page.getByRole("button", { name: "Pool", exact: true }).click();
+  await page.getByRole("button", { name: "Library", exact: true }).click();
   await expect(page.getByRole("region", { name: "Now playing" })).toBeVisible();
   await expectPlaying(page, alpha);
 });

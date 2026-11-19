@@ -620,7 +620,7 @@ function StudioShell({
               aria-pressed={mode === "pool"}
               onClick={() => setModePersist("pool")}
             >
-              Pool
+              Library
             </button>
             <button
               type="button"
@@ -632,7 +632,7 @@ function StudioShell({
               aria-pressed={mode === "arrange"}
               onClick={() => setModePersist("arrange")}
             >
-              Arrange
+              Subsets
             </button>
           </div>
           <div className="toolbar-right">

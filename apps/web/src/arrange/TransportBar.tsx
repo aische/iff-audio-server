@@ -87,7 +87,7 @@ export function TransportBar({
           playing ? "filterButton filterSelected arr-play" : "filterButton arr-play"
         }
         disabled={clips.length === 0}
-        title="Play the arrangement from the playhead (space)"
+        title="Play the subset from the playhead (space)"
         onClick={onTogglePlay}
       >
         {playing ? "■ stop" : "▶ play"}
@@ -215,7 +215,7 @@ export function TransportBar({
             <div className="arr-menu-heading">Shortcuts</div>
             <dl className="arr-menu-keys">
               <dt>space</dt>
-              <dd>play / stop arrangement</dd>
+              <dd>play / stop subset</dd>
               {isOwner && (
                 <>
                   <dt>del</dt>

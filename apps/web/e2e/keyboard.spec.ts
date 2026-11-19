@@ -216,10 +216,10 @@ test("the key map opens with ? (button or key) and closes with esc", async ({
   await expect(map).toHaveCount(0);
 
   // Library keys only exist in pool mode, and so does the key map.
-  await page.getByRole("button", { name: "Arrange", exact: true }).click();
+  await page.getByRole("button", { name: "Subsets", exact: true }).click();
   await expect(button).toHaveCount(0);
   await page.locator(".studio-brand").click();
   await page.keyboard.press("?");
   await expect(map).toHaveCount(0);
-  await page.getByRole("button", { name: "Pool", exact: true }).click();
+  await page.getByRole("button", { name: "Library", exact: true }).click();
 });

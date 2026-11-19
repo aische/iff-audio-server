@@ -20,8 +20,8 @@ test("arrangement and library playback stop each other", async ({ page }) => {
   await expectPlaying(page, alpha);
 
   await page.getByLabel(`Check ${bravo}`).check();
-  await page.getByRole("button", { name: "new arrangement" }).click();
-  await page.getByLabel("New arrangement name").fill(unique("exclusion cut"));
+  await page.getByRole("button", { name: "new subset" }).click();
+  await page.getByLabel("New subset name").fill(unique("exclusion cut"));
   await page.getByRole("button", { name: "create", exact: true }).click();
   const arrPlay = page.locator(".arr-play");
   await expect(arrPlay).toHaveText("▶ play");

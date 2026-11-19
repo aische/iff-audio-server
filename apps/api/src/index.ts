@@ -1072,7 +1072,7 @@ app.post<{ Body: { name?: string; clips?: unknown } }>(
       .where(and(eq(arrangements.userId, userId), eq(arrangements.name, name)))
       .limit(1);
     if (existing) {
-      return reply.code(409).send({ error: "arrangement already exists" });
+      return reply.code(409).send({ error: "subset already exists" });
     }
 
     const [row] = await db
@@ -1170,7 +1170,7 @@ app.put<{
           )
           .limit(1);
         if (conflict) {
-          return reply.code(409).send({ error: "arrangement already exists" });
+          return reply.code(409).send({ error: "subset already exists" });
         }
       }
       patch.name = name;

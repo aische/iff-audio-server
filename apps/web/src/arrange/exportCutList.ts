@@ -9,7 +9,7 @@ function sanitizeDownloadName(name: string) {
     .replace(/[/\\?%*:|"<>]/g, "-")
     .replace(/\s+/g, " ")
     .slice(0, 80);
-  return cleaned || "arrangement";
+  return cleaned || "subset";
 }
 
 /** Collapse tabs / newlines so a value stays on its line. */
@@ -80,7 +80,7 @@ export function buildCutList(
 
   const count = `${clips.length} ${clips.length === 1 ? "track" : "tracks"}`;
   return [
-    oneLine(name) || "Arrangement",
+    oneLine(name) || "Subset",
     `${count} · total ${formatClock(totalSec)}`,
     "",
     ...lines,

@@ -55,7 +55,7 @@ export function useArrangementDoc(
       } catch (err) {
         if (!cancelled) {
           onError(
-            err instanceof Error ? err.message : "Failed to load arrangement",
+            err instanceof Error ? err.message : "Failed to load subset",
           );
         }
       }
@@ -149,7 +149,7 @@ export function useArrangementDoc(
         if (seq !== saveSeqRef.current) return;
         setSaveState("error");
         onError(
-          err instanceof Error ? err.message : "Failed to save arrangement",
+          err instanceof Error ? err.message : "Failed to save subset",
         );
       }
     },

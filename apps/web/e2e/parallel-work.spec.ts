@@ -112,11 +112,11 @@ test("checking tracks and building an arrangement keeps A playing", async ({
   await expect(page.locator(".checked-meta")).toContainText("2 checked");
   await expectPlaying(page, alpha);
 
-  await page.getByRole("button", { name: "new arrangement" }).click();
-  await page.getByLabel("New arrangement name").fill(unique("parallel cut"));
+  await page.getByRole("button", { name: "new subset" }).click();
+  await page.getByLabel("New subset name").fill(unique("parallel cut"));
   await page.getByRole("button", { name: "create", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Arrange", exact: true }),
+    page.getByRole("button", { name: "Subsets", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
 
   await expectPlaying(page, alpha);
