@@ -19,6 +19,7 @@ import { PlaybackProvider } from "./PlaybackProvider";
 import { TrackInspector } from "./TrackInspector";
 import { useChangeFeed } from "./useChangeFeed";
 import { useLibrary } from "./useLibrary";
+import { useLibraryShortcuts } from "./useLibraryShortcuts";
 import { TagManager } from "./Tags";
 import Transport from "./Transport";
 import {
@@ -388,6 +389,51 @@ function StudioShell({
     if (playingHiddenByFilters) revealPlayingInList();
     openComment(playingTrack.id);
   }
+  // Keys act on the focused row only while the query shows it.
+  const focusedVisible = focusedId
+    ? (visible.find((t) => t.id === focusedId) ?? null)
+    : null;
+
+  useLibraryShortcuts(mode === "pool", {
+    moveFocus(delta) {
+      if (visible.length === 0) return;
+      const i = focusedVisible ? visible.indexOf(focusedVisible) : -1;
+      const next =
+        i < 0
+          ? delta > 0
+            ? 0
+            : visible.length - 1
+          : Math.min(visible.length - 1, Math.max(0, i + delta));
+      const id = visible[next].id;
+      setFocusedId(id);
+      // The last input wins: the inspector follows the key until the
+      // pointer enters another row.
+      window.clearTimeout(hoverClearTimer.current);
+      setHoveredId(null);
+      // The row is already rendered; only its class changes.
+      const el = document.querySelector<HTMLElement>(
+        `.trackList .track1[data-track-id="${CSS.escape(id)}"]`,
+      );
+      el?.focus({ preventScroll: true });
+      el?.scrollIntoView({ block: "nearest" });
+    },
+    playFocused() {
+      const t = focusedVisible;
+      if (!t?.present) return;
+      if (playback.track?.id === t.id) {
+        // Already loaded: resume if paused; never restart or stop.
+        if (!playback.isPlaying) playback.togglePause();
+        return;
+      }
+      setStopToken((n) => n + 1);
+      playback.play(t);
+    },
+    togglePause: playback.togglePause,
+    commentFocused() {
+      if (focusedVisible) openComment(focusedVisible.id);
+    },
+  });
+
   // The comment field needs a row in the library (not a vanished file).
   const canCommentOnPlaying =
     mode === "pool" &&

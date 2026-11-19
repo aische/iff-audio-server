@@ -955,6 +955,11 @@ body {
   outline: none;
 }
 
+/* j / k scroll the focused row clear of the sticky column header. */
+.track1 {
+  scroll-margin-top: 30px;
+}
+
 .track1.track-focused {
   outline: 1px solid var(--accent-line);
   outline-offset: -1px;

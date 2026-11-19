@@ -643,6 +643,7 @@ function TrackRow({
   const savedBodyRef = useRef(mine?.body ?? "");
   const seqRef = useRef(0);
   const commentInputRef = useRef<HTMLInputElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
 
   const commentFocused = useEffectEvent(onCommentFocused);
   useEffect(() => {
@@ -718,6 +719,7 @@ function TrackRow({
       ]
         .filter(Boolean)
         .join(" ")}
+      ref={rowRef}
       data-track-id={track.id}
       // Pool rows can hold keyboard focus themselves (j/k, enter, esc).
       tabIndex={pool ? -1 : undefined}
@@ -807,6 +809,14 @@ function TrackRow({
               placeholder="comment… #keywords"
               aria-label={`Comment for ${track.filename}`}
               onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                // Leave the field (blur saves), keep this row focused so
+                // library keys work again right away.
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  rowRef.current?.focus({ preventScroll: true });
+                }
+              }}
               onChange={(e) => {
                 setDraft(e.target.value);
                 setSaveState("idle");
