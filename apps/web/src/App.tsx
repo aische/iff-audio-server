@@ -45,12 +45,14 @@ import {
   readShowOthers,
   readSort,
   sortTracks,
+  trackHiddenBy,
   usePersistedWidth,
   type AppMode,
   type FilterId,
   type PoolSort,
   type SearchScope,
   type SortKey,
+  type TrackQuery,
 } from "./uiPersist";
 
 export default function App() {
@@ -314,14 +316,6 @@ function StudioShell({
     setPlaying(track);
   }
 
-  /** Bring the playing track back into the list without stopping audio. */
-  function revealPlayingInList() {
-    setSearch("");
-    setFilter("all");
-    setTagFilter(null);
-    setHideReleasedPersist(false);
-  }
-
   function onArrangementPlayingChange(playingArr: boolean) {
     if (playingArr) setPlaying(null);
   }
@@ -337,8 +331,7 @@ function StudioShell({
   const activeTagFilter =
     tagFilter && tagsById.has(tagFilter) ? tagFilter : null;
 
-  const filtered = filterTracks({
-    tracks,
+  const query: TrackQuery = {
     hideReleased,
     filter,
     tagFilter: activeTagFilter,
@@ -346,7 +339,8 @@ function StudioShell({
     searchScope,
     userId: user.id,
     tagsById,
-  });
+  };
+  const filtered = filterTracks(tracks, query);
   const visible = sortTracks(filtered, sort);
   // Prefer live library row so transport title/duration stay fresh; keep the
   // snapshot if the file vanished from the DB mid-play.
@@ -355,6 +349,20 @@ function StudioShell({
     : null;
   const playingHiddenByFilters =
     playingTrack != null && !visible.some((t) => t.id === playingTrack.id);
+
+  /**
+   * Bring the playing track back into the list without stopping audio.
+   * Clears only the parts of the query that hide it. Hide-released is turned
+   * off for this session only; the saved preference is left as it is.
+   */
+  function revealPlayingInList() {
+    if (!playingTrack) return;
+    const hidden = trackHiddenBy(playingTrack, query);
+    if (hidden.search) setSearch("");
+    if (hidden.filter) setFilter("all");
+    if (hidden.tag) setTagFilter(null);
+    if (hidden.released) setHideReleased(false);
+  }
   // Looked up in all tracks: arrangement clips may be filtered out of the list.
   const inspected = hoveredId
     ? (tracks.find((t) => t.id === hoveredId) ?? null)

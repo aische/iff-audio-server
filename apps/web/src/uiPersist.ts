@@ -245,25 +245,8 @@ export function sortTracks(list: Track[], sort: PoolSort): Track[] {
   });
 }
 
-/**
- * Filter tracks by release state, comment presence, shared tag and search.
- * The `present` field is NOT checked here — pool callers typically want all
- * tracks, while arrange callers can pre-filter on `present` themselves.
- *
- * Search: every whitespace-separated term must match (case-insensitive
- * substring) the filename, a shared tag name, or a comment in scope.
- */
-export function filterTracks({
-  tracks,
-  hideReleased,
-  filter,
-  tagFilter,
-  search,
-  searchScope,
-  userId,
-  tagsById,
-}: {
-  tracks: Track[];
+/** What the pool list shows: everything except sort. */
+export type TrackQuery = {
   hideReleased: boolean;
   filter: FilterId;
   /** Shared tag id. */
@@ -272,25 +255,53 @@ export function filterTracks({
   searchScope: SearchScope;
   userId: string;
   tagsById: ReadonlyMap<string, Tag>;
-}): Track[] {
-  const terms = search.toLowerCase().split(/\s+/).filter(Boolean);
+};
+
+/** The parts of a query that hide a track; all false means it is shown. */
+export type HiddenBy = {
+  released: boolean;
+  filter: boolean;
+  tag: boolean;
+  search: boolean;
+};
+
+/**
+ * Why a track is hidden by the query, part by part. The `present` field is
+ * NOT checked — pool callers want all tracks, while arrange callers can
+ * pre-filter on `present` themselves.
+ *
+ * Search: every whitespace-separated term must match (case-insensitive
+ * substring) the filename, a shared tag name, or a comment in scope.
+ */
+export function trackHiddenBy(track: Track, q: TrackQuery): HiddenBy {
+  return {
+    released: q.hideReleased && !!track.releasedOn,
+    filter: q.filter === "commented" && track.comments.length === 0,
+    tag: !!q.tagFilter && !track.tags.some((l) => l.tagId === q.tagFilter),
+    search: !matchesSearch(track, q),
+  };
+}
+
+function matchesSearch(t: Track, q: TrackQuery): boolean {
+  const terms = q.search.toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return true;
+  const haystack = [
+    t.filename,
+    // "#name" so a search for "#foo" also finds the shared tag foo.
+    ...t.tags.map((l) => `#${q.tagsById.get(l.tagId)?.name ?? ""}`),
+    ...t.comments
+      .filter((c) => q.searchScope === "all" || c.userId === q.userId)
+      .map((c) => c.body),
+  ]
+    .join("\n")
+    .toLowerCase();
+  return terms.every((term) => haystack.includes(term));
+}
+
+/** Tracks shown by the query (see `trackHiddenBy`). */
+export function filterTracks(tracks: Track[], q: TrackQuery): Track[] {
   return tracks.filter((t) => {
-    if (hideReleased && t.releasedOn) return false;
-    if (filter === "commented" && t.comments.length === 0) return false;
-    if (tagFilter && !t.tags.some((l) => l.tagId === tagFilter)) return false;
-    if (terms.length > 0) {
-      const haystack = [
-        t.filename,
-        // "#name" so a search for "#foo" also finds the shared tag foo.
-        ...t.tags.map((l) => `#${tagsById.get(l.tagId)?.name ?? ""}`),
-        ...t.comments
-          .filter((c) => searchScope === "all" || c.userId === userId)
-          .map((c) => c.body),
-      ]
-        .join("\n")
-        .toLowerCase();
-      if (!terms.every((term) => haystack.includes(term))) return false;
-    }
-    return true;
+    const h = trackHiddenBy(t, q);
+    return !h.released && !h.filter && !h.tag && !h.search;
   });
 }

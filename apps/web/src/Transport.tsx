@@ -12,7 +12,7 @@ export type TransportProps = {
   track: TransportTrack | null;
   /** Playing track is loaded but not in the current list query. */
   hiddenByFilters?: boolean;
-  /** Clear query enough to show the playing track; must not stop audio. */
+  /** Clear only what hides the playing track; must not stop audio. */
   onRevealInList?: () => void;
   onEnded?: () => void;
 };
@@ -127,7 +127,7 @@ function TransportActive({
             <button
               type="button"
               className="transport-reveal"
-              title="Clear search and filters so this track appears in the list (keeps playing)"
+              title="Clear only what hides this track from the list (keeps playing)"
               onClick={onRevealInList}
             >
               show
