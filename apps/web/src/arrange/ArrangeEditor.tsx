@@ -206,7 +206,7 @@ export function ArrangeEditor({
     return (
       <div className="arr-panel">
         <p className="arr-muted" style={{ padding: 12 }}>
-          Loading subset…
+          Loading arrangement…
         </p>
       </div>
     );

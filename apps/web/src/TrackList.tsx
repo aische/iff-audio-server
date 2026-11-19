@@ -159,8 +159,8 @@ function CheckedBar({ checked }: { checked: CheckedSummary }) {
             value={name}
             disabled={busy}
             maxLength={200}
-            placeholder="subset name"
-            aria-label="New subset name"
+            placeholder="arrangement name"
+            aria-label="New arrangement name"
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") setNaming(false);
@@ -182,10 +182,10 @@ function CheckedBar({ checked }: { checked: CheckedSummary }) {
         <button
           type="button"
           className="filterButton"
-          title="Create a subset from the checked tracks, in list order"
+          title="Create an arrangement from the checked tracks, in list order"
           onClick={() => setNaming(true)}
         >
-          new subset
+          new arrangement
         </button>
       )}
       <button

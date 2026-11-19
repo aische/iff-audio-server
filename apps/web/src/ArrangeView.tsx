@@ -73,7 +73,7 @@ export function ArrangeShell({
         (err: unknown) => {
           if (background && !loading) return;
           onError(
-            err instanceof Error ? err.message : "Failed to load subsets",
+            err instanceof Error ? err.message : "Failed to load arrangements",
           );
         },
       )
@@ -137,7 +137,7 @@ export function ArrangeShell({
         onBack={() => setActiveId(null)}
         onGone={() => {
           setActiveId(null);
-          onError("That subset was deleted by its owner.");
+          onError("That arrangement was deleted by its owner.");
         }}
         onOpen={setActiveId}
         onError={onError}
@@ -157,14 +157,14 @@ export function ArrangeShell({
   return (
     <div className="arr-panel">
       <div className="arr-toolbar">
-        <span className="arr-toolbar-title">subsets</span>
+        <span className="arr-toolbar-title">arrangements</span>
       </div>
       <div className="arr-list-body">
         <form className="arr-create" onSubmit={onCreate}>
           <input
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            placeholder="new subset name"
+            placeholder="new arrangement name"
             required
           />
           <button type="submit" className="filterButton">
@@ -175,14 +175,14 @@ export function ArrangeShell({
           <p className="arr-muted">Loading…</p>
         ) : list.length === 0 ? (
           <p className="arr-muted">
-            No subsets yet. Create one, then drag tracks into the sequence.
+            No arrangements yet. Create one, then drag tracks into the sequence.
           </p>
         ) : (
           <>
             <ArrangementListSection
               title="yours"
               items={mine}
-              empty="You have no subsets yet."
+              empty="You have no arrangements yet."
               onOpen={setActiveId}
               onDelete={async (a) => {
                 if (!confirm(`Delete "${a.name}"?`)) return;
@@ -199,7 +199,7 @@ export function ArrangeShell({
             <ArrangementListSection
               title="others"
               items={others}
-              empty="No subsets from other users yet."
+              empty="No arrangements from other users yet."
               showOwner
               onOpen={setActiveId}
               onCopy={(a) => void onCopy(a.id)}

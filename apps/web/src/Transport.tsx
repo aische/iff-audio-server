@@ -137,7 +137,7 @@ function TransportActive({
     return (
       <div
         className="transport transport-compact"
-        title="Library playback. The subset has its own transport."
+        title="Library playback. The arrangement has its own transport."
       >
         {playButton}
         <span className="transport-kicker">library</span>

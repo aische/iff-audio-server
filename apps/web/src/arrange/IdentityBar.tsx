@@ -48,7 +48,7 @@ export function IdentityBar({
           className="arr-name-input"
           value={name}
           onChange={(e) => onNameChange(e.target.value)}
-          aria-label="Subset name"
+          aria-label="Arrangement name"
         />
       ) : (
         <span className="arr-name-ro" title={name}>
@@ -77,7 +77,7 @@ export function IdentityBar({
             type="button"
             className="filterButton arr-cta"
             disabled={copying}
-            title="Make your own editable copy of this subset"
+            title="Make your own editable copy of this arrangement"
             onClick={() => void copy()}
           >
             {copying ? "copying…" : "copy to edit"}

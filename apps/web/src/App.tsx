@@ -635,7 +635,7 @@ function StudioShell({
               aria-pressed={mode === "arrange"}
               onClick={() => setModePersist("arrange")}
             >
-              Subsets
+              Arrange
             </button>
           </div>
           <div className="toolbar-right">
