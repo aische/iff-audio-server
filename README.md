@@ -140,7 +140,7 @@ npm run migrate -w @iff/db
 
 ## Database
 
-Schema lives in `packages/db`. Comments are one row per `(user, track)` (upsert); `#words` in a comment are personal keywords (highlighted, searchable, one click to share as a tag). Shared tags are band-wide: `tags` (unique name, optional category) and `track_tags` (who added it, when); anyone can add, remove, rename, merge or delete them. Arrangements are per-user documents with a JSON `clips` array (timeline position, source in-point, duration, lane).
+Schema lives in `packages/db`. Comments are one row per `(user, track)` (upsert); `#words` in a comment are personal keywords (highlighted, searchable, one click to share as a tag). Shared tags are band-wide: `tags` (unique name, optional category) and `track_tags` (who added it, when); anyone can add, remove, rename, merge or delete them. Arrangements are per-user documents with a JSON `clips` array (timeline position, source in-point, duration, lane). `events` feeds the "what's new" ribbon (comments, tags, release labels, new tracks from sync); the routes and the sync script write it, superseded entries are deleted and anything older than 90 days is pruned.
 
 ```bash
 npm run migrate -w @iff/db

@@ -13,13 +13,27 @@ import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import bcrypt from "bcrypt";
 import dotenv from "dotenv";
-import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import {
   arrangements,
   bumpRev,
   comments,
   createDb,
+  events,
   readRev,
+  recordEvent,
+  retractEvents,
   tags,
   trackTags,
   tracks,
@@ -230,6 +244,56 @@ app.get("/health", { config: { public: true } }, async () => ({ ok: true }));
 /** Change revision; clients refetch their data when it differs. */
 app.get("/changes", async () => ({ rev: await readRev(db) }));
 
+/** At most this many events per answer (newest first). */
+const EVENTS_LIMIT = 50;
+
+/**
+ * Band activity since a cursor, for the "what's new" ribbon: other users'
+ * events and library sync, newest first. Without `after`, only the latest
+ * id (a client's first visit starts from there instead of the backlog).
+ */
+app.get<{ Querystring: { after?: number } }>(
+  "/events",
+  {
+    schema: {
+      querystring: {
+        type: "object",
+        properties: { after: { type: "integer", minimum: 0 } },
+      },
+    },
+  },
+  async (request) => {
+    const [{ latest }] = await db
+      .select({ latest: sql<number>`coalesce(max(${events.id}), 0)::int` })
+      .from(events);
+    const { after } = request.query;
+    if (after === undefined) return { latest, events: [] };
+
+    const rows = await db
+      .select({
+        id: events.id,
+        kind: events.kind,
+        detail: events.detail,
+        createdAt: events.createdAt,
+        actorEmail: users.email,
+        trackId: events.trackId,
+        trackFilename: tracks.filename,
+      })
+      .from(events)
+      .leftJoin(users, eq(events.actorId, users.id))
+      .leftJoin(tracks, eq(events.trackId, tracks.id))
+      .where(
+        and(
+          gt(events.id, after),
+          or(isNull(events.actorId), ne(events.actorId, request.userId)),
+        ),
+      )
+      .orderBy(desc(events.id))
+      .limit(EVENTS_LIMIT);
+    return { latest, events: rows };
+  },
+);
+
 app.post<{
   Body: { email?: string; password?: string };
 }>(
@@ -426,6 +490,12 @@ app.patch<{
     }
     const releasedOn = raw?.trim() || null;
 
+    const [before] = await db
+      .select({ releasedOn: tracks.releasedOn })
+      .from(tracks)
+      .where(eq(tracks.id, request.params.id))
+      .limit(1);
+
     const [row] = await db
       .update(tracks)
       .set({ releasedOn, updatedAt: new Date() })
@@ -436,6 +506,17 @@ app.patch<{
         updatedAt: tracks.updatedAt,
       });
     if (!row) return reply.code(404).send({ error: "not found" });
+
+    if (!releasedOn) {
+      await retractEvents(db, { kind: "released", trackId: row.id });
+    } else if (releasedOn !== before?.releasedOn) {
+      await recordEvent(db, {
+        kind: "released",
+        actorId: request.userId,
+        trackId: row.id,
+        detail: releasedOn,
+      });
+    }
 
     return row;
   },
@@ -570,6 +651,11 @@ app.put<{
       await db
         .delete(comments)
         .where(and(eq(comments.trackId, track.id), eq(comments.userId, userId)));
+      await retractEvents(db, {
+        kind: "comment",
+        trackId: track.id,
+        actorId: userId,
+      });
       return reply.code(204).send();
     }
 
@@ -588,6 +674,7 @@ app.put<{
         set: { body, updatedAt: now },
       })
       .returning();
+    await recordEvent(db, { kind: "comment", actorId: userId, trackId: track.id });
 
     const [user] = await db
       .select({ email: users.email })
@@ -680,10 +767,19 @@ app.post<{ Params: { id: string }; Body: { name?: string } }>(
     }
     if (!tag) return reply.code(500).send({ error: "could not create tag" });
 
-    await db
+    const added = await db
       .insert(trackTags)
       .values({ trackId: track.id, tagId: tag.id, addedBy: userId })
-      .onConflictDoNothing();
+      .onConflictDoNothing()
+      .returning({ tagId: trackTags.tagId });
+    if (added.length > 0) {
+      await recordEvent(db, {
+        kind: "tag",
+        actorId: userId,
+        trackId: track.id,
+        detail: tag.name,
+      });
+    }
 
     const [link] = await db
       .select({
@@ -715,14 +811,29 @@ app.delete<{ Params: { id: string; tagId: string } }>(
     },
   },
   async (request, reply) => {
-    await db
+    const removed = await db
       .delete(trackTags)
       .where(
         and(
           eq(trackTags.trackId, request.params.id),
           eq(trackTags.tagId, request.params.tagId),
         ),
-      );
+      )
+      .returning({ tagId: trackTags.tagId });
+    if (removed.length > 0) {
+      const [tag] = await db
+        .select({ name: tags.name })
+        .from(tags)
+        .where(eq(tags.id, request.params.tagId))
+        .limit(1);
+      if (tag) {
+        await retractEvents(db, {
+          kind: "tag",
+          trackId: request.params.id,
+          detail: tag.name,
+        });
+      }
+    }
     return reply.code(204).send();
   },
 );

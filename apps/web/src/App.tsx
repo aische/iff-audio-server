@@ -13,6 +13,7 @@ import {
   type Track,
   type User,
 } from "./api";
+import { ActivityRibbon } from "./ActivityRibbon";
 import { ArrangeShell, type ArrangeAddApi } from "./ArrangeView";
 import { newClipForTrack } from "./clips";
 import { KeyMap } from "./KeyMap";
@@ -20,6 +21,7 @@ import { usePlayback } from "./playback";
 import { PlaybackProvider } from "./PlaybackProvider";
 import { SessionResume } from "./SessionResume";
 import { TrackInspector } from "./TrackInspector";
+import { useActivity } from "./useActivity";
 import { useChangeFeed } from "./useChangeFeed";
 import { useLibrary } from "./useLibrary";
 import { useLibraryShortcuts } from "./useLibraryShortcuts";
@@ -262,6 +264,7 @@ function StudioShell({
   const [rowRequest, setRowRequest] = useState<RowRequest | null>(null);
 
   const rev = useChangeFeed();
+  const activity = useActivity(rev, user.id);
   const {
     tracks,
     tags,
@@ -705,6 +708,17 @@ function StudioShell({
             />
           }
         />
+
+        {mode === "pool" && (
+          <ActivityRibbon
+            events={activity.events}
+            onShowTrack={(id) => {
+              const t = tracks.find((x) => x.id === id);
+              if (t) showInList(t);
+            }}
+            onDismiss={activity.dismiss}
+          />
+        )}
 
         <div className="toolbar">
           <FilterBar

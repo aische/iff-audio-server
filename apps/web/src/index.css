@@ -426,6 +426,135 @@ body {
   font-family: var(--font-mono);
 }
 
+/* "What's new": a thin, dismissible line of other people's activity. */
+.activity {
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12px;
+  color: var(--text-dim);
+  animation: activity-in 200ms ease-out;
+}
+
+@keyframes activity-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.activity-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.activity-kicker {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.activity-items {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.activity-entry {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.activity-sep {
+  color: var(--text-faint);
+  padding: 0 6px;
+}
+
+.activity-item {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  padding: 1px 2px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activity-item:hover:not(:disabled) {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--text-faint);
+}
+
+.activity-item:disabled {
+  cursor: default;
+}
+
+.activity-who,
+.activity-track {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.activity-tag {
+  color: var(--tag);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.activity-more,
+.activity-dismiss {
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 6px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.activity-dismiss {
+  margin-left: auto;
+}
+
+.activity-more:hover,
+.activity-dismiss:hover {
+  border-color: var(--text-faint);
+  color: var(--text);
+}
+
+.activity-list {
+  list-style: none;
+  margin: 4px 0 2px;
+  padding: 0 0 0 8px;
+  border-left: 1px solid var(--line);
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.activity-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.activity-when {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  min-width: 7.5em;
+}
+
 /* Idle dock (pool): session resume. Quieter than a playing track. */
 .resume {
   display: flex;
@@ -702,7 +831,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .transport-dock {
+  .transport-dock,
+  .activity {
     animation: none;
   }
 }

@@ -15,6 +15,19 @@ export type Comment = {
   userEmail: string;
 };
 
+/** One entry of the band activity feed (other users and library sync). */
+export type ActivityEvent = {
+  id: number;
+  kind: "comment" | "tag" | "released" | "tracks_added";
+  /** Tag name, release label, or the number of new tracks. */
+  detail: string | null;
+  createdAt: string;
+  /** Null for library sync, or a deleted user. */
+  actorEmail: string | null;
+  trackId: string | null;
+  trackFilename: string | null;
+};
+
 /** Band-wide tag. */
 export type Tag = {
   id: string;
@@ -227,6 +240,12 @@ export const api = {
 
   /** Change revision; it differs whenever shared data may have changed. */
   getChanges: () => request<{ rev: string }>("/changes"),
+
+  /** Others' activity after a cursor; without one, only the latest id. */
+  getEvents: (after?: number) =>
+    request<{ latest: number; events: ActivityEvent[] }>(
+      after === undefined ? "/events" : `/events?after=${after}`,
+    ),
 
   listTracks: () => request<Track[]>("/tracks"),
 

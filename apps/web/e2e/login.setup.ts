@@ -11,6 +11,20 @@ for (const [key, user] of Object.entries(USERS)) {
     await page.getByLabel("Password").fill(user.password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page.locator(".user-email")).toHaveText(user.email);
+    // Save the session without the activity "seen" cursor, so every test
+    // starts like a first visit (no backlog from earlier tests).
+    const cursorSet = () =>
+      page.evaluate(() =>
+        Object.keys(localStorage).some((k) =>
+          k.startsWith("iff-activity-seen:"),
+        ),
+      );
+    await expect.poll(cursorSet).toBe(true);
+    await page.evaluate(() => {
+      for (const k of Object.keys(localStorage)) {
+        if (k.startsWith("iff-activity-seen:")) localStorage.removeItem(k);
+      }
+    });
     await page.context().storageState({
       path: path.join(authDir, `${key}.json`),
     });

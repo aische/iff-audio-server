@@ -2,7 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { eq, inArray } from "drizzle-orm";
-import { bumpRev, createDb, tracks } from "@iff/db";
+import { bumpRev, createDb, recordEvent, tracks } from "@iff/db";
 import {
   libraryFilePath,
   listLibraryMp3s,
@@ -43,6 +43,8 @@ const byFilename = new Map(existing.map((t) => [t.filename, t]));
 
 /** Rows whose peaks + duration must be (re)computed after the upsert pass. */
 const needPeaks: { id: string; filename: string }[] = [];
+/** Tracks this run created (for the activity event). */
+const insertedIds: string[] = [];
 
 for (const file of onDisk) {
   const row = byFilename.get(file.filename);
@@ -58,6 +60,7 @@ for (const file of onDisk) {
       })
       .returning({ id: tracks.id });
     needPeaks.push({ id: created.id, filename: file.filename });
+    insertedIds.push(created.id);
     inserted++;
     continue;
   }
@@ -126,6 +129,16 @@ if (needPeaks.length > 0) {
       }
     }
   }
+}
+
+// The ribbon says "N new tracks"; with exactly one, it names it.
+if (inserted > 0) {
+  await recordEvent(db, {
+    kind: "tracks_added",
+    actorId: null,
+    trackId: insertedIds.length === 1 ? insertedIds[0] : null,
+    detail: String(inserted),
+  });
 }
 
 // Tell open clients to refetch tracks.

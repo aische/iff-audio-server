@@ -4,6 +4,7 @@ import {
   text,
   timestamp,
   bigint,
+  bigserial,
   boolean,
   integer,
   jsonb,
@@ -150,3 +151,29 @@ export const sessions = pgTable("sessions", {
  * its value and refetch when it changes; it carries no other meaning.
  */
 export const changeRev = pgSequence("change_rev");
+
+/** What an activity event says happened (see `events`). */
+export type EventKind = "comment" | "tag" | "released" | "tracks_added";
+
+/**
+ * Band activity for the "what's new" ribbon: who commented, tagged or
+ * released what, and new tracks from library sync. Written explicitly by
+ * the routes and scripts that do these things; `id` is the clients' read
+ * cursor. Not an audit log: superseded events are deleted (see recordEvent).
+ */
+export const events = pgTable("events", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  kind: text("kind").$type<EventKind>().notNull(),
+  /** Null for library sync, or when the user no longer exists. */
+  actorId: uuid("actor_id").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  trackId: uuid("track_id").references(() => tracks.id, {
+    onDelete: "cascade",
+  }),
+  /** Tag name, release label, or the number of new tracks. */
+  detail: text("detail"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
