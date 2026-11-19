@@ -499,6 +499,7 @@ function TrackRow({
   playing,
   selected,
   checked,
+  focusComment,
   showOthers,
   showComments,
   tagFilter,
@@ -508,6 +509,7 @@ function TrackRow({
   draggable,
   onTogglePlay,
   onToggleChecked,
+  onCommentFocused,
   onHover,
   onTagClick,
   onCommentsChange,
@@ -521,6 +523,8 @@ function TrackRow({
   playing: boolean;
   selected: boolean;
   checked: boolean;
+  /** Scroll to and focus the comment field, then call onCommentFocused. */
+  focusComment: boolean;
   showOthers: boolean;
   showComments: boolean;
   tagFilter: string | null;
@@ -530,6 +534,7 @@ function TrackRow({
   draggable: boolean;
   onTogglePlay: () => void;
   onToggleChecked: () => void;
+  onCommentFocused: () => void;
   onHover: (hovered: boolean) => void;
   onTagClick: (tagId: string) => void;
   onCommentsChange: (comments: Comment[]) => void;
@@ -546,6 +551,18 @@ function TrackRow({
   const draftRef = useRef(draft);
   const savedBodyRef = useRef(mine?.body ?? "");
   const seqRef = useRef(0);
+  const commentInputRef = useRef<HTMLInputElement>(null);
+
+  const commentFocused = useEffectEvent(onCommentFocused);
+  useEffect(() => {
+    if (!focusComment) return;
+    const input = commentInputRef.current;
+    if (input) {
+      input.scrollIntoView({ block: "nearest" });
+      input.focus();
+    }
+    commentFocused();
+  }, [focusComment]);
 
   useEffect(() => {
     const body = mine?.body ?? "";
@@ -678,6 +695,7 @@ function TrackRow({
         <div className="trackBox2">
           <div className="input_box1">
             <input
+              ref={commentInputRef}
               value={draft}
               placeholder="comment… #keywords"
               aria-label={`Comment for ${track.filename}`}
@@ -776,6 +794,8 @@ export function TrackList({
   user,
   mode,
   playingId,
+  commentRequestId,
+  onCommentRequestDone,
   selectedId,
   checks,
   showOthers,
@@ -800,6 +820,9 @@ export function TrackList({
   user: User;
   mode: AppMode;
   playingId: string | null;
+  /** Row whose comment field should take focus (dock "comment"). */
+  commentRequestId: string | null;
+  onCommentRequestDone: () => void;
   /** Track of the clip selected in the arrangement (highlighted), if any. */
   selectedId: string | null;
   checks: TrackChecks;
@@ -915,6 +938,8 @@ export function TrackList({
           playing={playingId === track.id}
           selected={selectedId === track.id}
           checked={checks.checkedIds.has(track.id)}
+          focusComment={commentRequestId === track.id}
+          onCommentFocused={onCommentRequestDone}
           showOthers={showOthers}
           showComments={showComments}
           tagFilter={tagFilter}

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { api } from "./api";
 
 export type PeaksRecord = {
@@ -38,6 +39,40 @@ export function getCachedPeaks(trackId: string): PeaksRecord | undefined {
   return memory.get(trackId);
 }
 
+/**
+ * Peaks for a track once `enabled` (e.g. the row is on screen): the cached
+ * record, `undefined` while loading or not yet enabled, `null` if the server
+ * has none.
+ */
+export function usePeaks(
+  trackId: string,
+  enabled = true,
+): PeaksRecord | null | undefined {
+  const [loaded, setLoaded] = useState<{
+    trackId: string;
+    rec: PeaksRecord | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!enabled || memory.has(trackId)) return;
+    let cancelled = false;
+    void loadPeaks(trackId)
+      .then((rec) => {
+        if (!cancelled) setLoaded({ trackId, rec });
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded({ trackId, rec: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [trackId, enabled]);
+
+  const hit = memory.get(trackId);
+  if (hit) return hit;
+  return loaded?.trackId === trackId ? loaded.rec : undefined;
+}
+
 /** Draw the clip's slice of peaks into a canvas (CSS pixel coords). */
 export function drawClipWaveform(
   ctx: CanvasRenderingContext2D,
@@ -47,10 +82,11 @@ export function drawClipWaveform(
   durationSec: number,
   width: number,
   height: number,
+  color = "rgba(255,255,255,0.55)",
 ) {
   ctx.clearRect(0, 0, width, height);
   const mid = height / 2;
-  ctx.strokeStyle = "rgba(255,255,255,0.55)";
+  ctx.strokeStyle = color;
   ctx.lineWidth = 1;
 
   if (
@@ -88,7 +124,7 @@ export function drawClipWaveform(
   }
 
   // Filled envelope: top edge left→right, bottom edge back.
-  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.fillStyle = color;
   ctx.beginPath();
   ctx.moveTo(0, mid - amps[0]!);
   for (let c = 0; c < cols; c++) {

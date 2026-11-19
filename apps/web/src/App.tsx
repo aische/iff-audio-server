@@ -236,6 +236,9 @@ function StudioShell({
     id: string;
     seq: number;
   } | null>(null);
+  // "Comment on what's playing": the row focuses its comment field, then
+  // clears the request.
+  const [commentRequest, setCommentRequest] = useState<string | null>(null);
 
   const rev = useChangeFeed();
   const {
@@ -368,6 +371,18 @@ function StudioShell({
     if (hidden.tag) setTagFilter(null);
     if (hidden.released) setHideReleased(false);
   }
+
+  /** Focus the playing track's comment field, revealing its row if hidden. */
+  function commentOnPlaying() {
+    if (!playingTrack) return;
+    if (playingHiddenByFilters) revealPlayingInList();
+    setCommentRequest(playingTrack.id);
+  }
+  // The comment field needs a row in the library (not a vanished file).
+  const canCommentOnPlaying =
+    mode === "pool" &&
+    playingTrack != null &&
+    tracks.some((t) => t.id === playingTrack.id);
   // Looked up in all tracks: arrangement clips may be filtered out of the list.
   const inspected = hoveredId
     ? (tracks.find((t) => t.id === hoveredId) ?? null)
@@ -539,8 +554,10 @@ function StudioShell({
 
         <Transport
           track={playingTrack}
+          variant={mode === "pool" ? "dock" : "compact"}
           hiddenByFilters={playingHiddenByFilters}
           onRevealInList={revealPlayingInList}
+          onComment={canCommentOnPlaying ? commentOnPlaying : undefined}
         />
 
         <div className="toolbar">
@@ -595,6 +612,8 @@ function StudioShell({
               user={user}
               mode={mode}
               playingId={playingTrack?.id ?? null}
+              commentRequestId={commentRequest}
+              onCommentRequestDone={() => setCommentRequest(null)}
               selectedId={mode === "arrange" ? arrangeSelectedTrackId : null}
               checks={checks}
               showOthers={showOthers}

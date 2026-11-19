@@ -1,5 +1,12 @@
-import { createContext, useContext, useSyncExternalStore } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useSyncExternalStore,
+} from "react";
 import type { Track } from "./api";
+import { useLatestRef } from "./arrange/playhead";
 
 /**
  * Library playback: the one track in the speakers from the pool. Owned by
@@ -41,4 +48,42 @@ export function usePlayback(): LibraryPlayback {
 export function usePlaybackSeconds(): number {
   const { subscribeTime, getTime } = usePlayback();
   return useSyncExternalStore(subscribeTime, () => Math.floor(getTime()));
+}
+
+/**
+ * Calls `draw(seconds)` with the playback position: every animation frame
+ * while playing (smooth playheads), and on each seek or time change while
+ * paused. Never touches React state, so the caller does not re-render;
+ * `draw` should write to DOM refs.
+ */
+export function usePlaybackFrame(draw: (seconds: number) => void) {
+  const { isPlaying, getTime, subscribeTime } = usePlayback();
+  const drawRef = useLatestRef(draw);
+
+  // Also after every render of the caller: its inputs (e.g. duration) may
+  // have changed while paused.
+  useLayoutEffect(() => {
+    drawRef.current(getTime());
+  });
+
+  useEffect(() => {
+    const tick = () => drawRef.current(getTime());
+    tick();
+    const unsubscribe = subscribeTime(tick);
+    if (!isPlaying) return unsubscribe;
+    let frame = requestAnimationFrame(function loop() {
+      tick();
+      frame = requestAnimationFrame(loop);
+    });
+    return () => {
+      unsubscribe();
+      cancelAnimationFrame(frame);
+    };
+  }, [isPlaying, getTime, subscribeTime, drawRef]);
+}
+
+/** Playback position as a 0–1 fraction of `duration` (0 if unknown). */
+export function playedFraction(seconds: number, duration: number | null) {
+  if (!duration || duration <= 0) return 0;
+  return Math.min(1, Math.max(0, seconds / duration));
 }

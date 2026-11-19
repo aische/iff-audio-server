@@ -357,7 +357,7 @@ body {
   color: var(--text-dim);
 }
 
-/* ——— transport ——— */
+/* ——— transport: Now Playing dock (pool) / compact line (arrange) ——— */
 
 .transport {
   display: flex;
@@ -379,6 +379,32 @@ body {
   font-family: var(--font-mono);
 }
 
+.transport-dock {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px 16px 12px;
+  background:
+    linear-gradient(180deg, rgb(140 193 82 / 5%), transparent 70%),
+    var(--bg-raised);
+  border-bottom-color: var(--line);
+  animation: dock-in 220ms ease-out;
+}
+
+@keyframes dock-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.transport-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
 .transport-play {
   flex-shrink: 0;
   min-width: 48px;
@@ -394,9 +420,37 @@ body {
   line-height: 1;
 }
 
+.transport-dock .transport-play {
+  min-width: 58px;
+  height: 34px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
 .transport-play:hover {
   border-color: var(--play);
   background: var(--play-soft);
+}
+
+.transport-id {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.transport-kicker {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--play);
+  flex-shrink: 0;
+}
+
+.transport-compact .transport-kicker {
+  color: var(--text-faint);
 }
 
 .transport-title {
@@ -408,6 +462,16 @@ body {
   white-space: nowrap;
   max-width: 280px;
   min-width: 0;
+}
+
+/* The one display style: the title of what is in the speakers. */
+.transport-dock .transport-title {
+  font-family: var(--font-ui);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  max-width: min(560px, 50vw);
 }
 
 .transport-hidden {
@@ -423,7 +487,8 @@ body {
   color: var(--text-faint);
 }
 
-.transport-reveal {
+.transport-reveal,
+.transport-comment {
   font: inherit;
   font-size: 11px;
   padding: 2px 7px;
@@ -431,9 +496,11 @@ body {
   border: 1px solid var(--line);
   background: var(--bg);
   color: var(--text-dim);
+  flex-shrink: 0;
 }
 
-.transport-reveal:hover {
+.transport-reveal:hover,
+.transport-comment:hover {
   border-color: var(--play-line);
   color: var(--play);
   background: var(--play-soft);
@@ -447,6 +514,15 @@ body {
   flex-shrink: 0;
 }
 
+.transport-dock .transport-time {
+  margin-left: auto;
+  font-size: 13px;
+}
+
+.transport-dock .transport-time-now {
+  color: var(--text);
+}
+
 .transport-scrub {
   flex: 1;
   min-width: 80px;
@@ -454,6 +530,82 @@ body {
   accent-color: var(--play);
   height: 4px;
   cursor: pointer;
+}
+
+/* Dock waveform: canvas, played tint, playhead; a clear range input on top. */
+.transport-wave {
+  position: relative;
+  height: 44px;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+}
+
+.transport-wave:has(.transport-scrub:focus-visible) {
+  outline: 1px solid var(--play-line);
+  outline-offset: 1px;
+}
+
+.transport-wave-canvas,
+.wave-flat {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.wave-flat {
+  background: linear-gradient(
+    to bottom,
+    transparent calc(50% - 0.5px),
+    var(--line) calc(50% - 0.5px),
+    var(--line) calc(50% + 0.5px),
+    transparent calc(50% + 0.5px)
+  );
+}
+
+.transport-wave-progress {
+  position: absolute;
+  inset: 0;
+  background: var(--play-soft);
+  transform-origin: left center;
+  transform: scaleX(0);
+  pointer-events: none;
+}
+
+/* Full-width layer moved by translateX(p%): its left edge is the playhead. */
+.wave-playhead {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(100% - 2px);
+  pointer-events: none;
+}
+
+.wave-playhead::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--play);
+  box-shadow: 0 0 6px rgb(140 193 82 / 45%);
+}
+
+.transport-wave .transport-scrub {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .transport-dock {
+    animation: none;
+  }
 }
 
 /* ——— body / split ——— */
