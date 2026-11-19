@@ -20,7 +20,7 @@ import { useArrangementDoc } from "./useArrangementDoc";
 import { useArrangeShortcuts } from "./useArrangeShortcuts";
 import { useArrangeTransport } from "./useArrangeTransport";
 import { usePeaksVersion } from "./usePeaksVersion";
-import { EDITOR_PX_DEFAULT, fitPxPerSec } from "./waveScale";
+import { EDITOR_PX_DEFAULT } from "./waveScale";
 
 /** What the editor exposes to the library panel for adding tracks. */
 export type ArrangeAddApi = {
@@ -81,7 +81,6 @@ export function ArrangeEditor({
   const [overviewZoom, setOverviewZoom] = useState(1);
   const [inspectorOpen, setInspectorOpen] = useState(readInspectorOpen);
   const [editorPxPerSec, setEditorPxPerSec] = useState(EDITOR_PX_DEFAULT);
-  const clipsRef = useLatestRef(clips);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const trackById = useMemo(() => {
@@ -137,7 +136,6 @@ export function ArrangeEditor({
       return next;
     });
     setSelectedId(item.instanceId);
-    setEditorPxPerSec(fitPxPerSec(item.outSec));
   }
 
   // The parent keeps the published API in state; route through a ref so it
@@ -182,14 +180,11 @@ export function ArrangeEditor({
     );
   }
 
+  // The waveform zoom (px/s) is kept across selections; trimScale only
+  // caps it where a long track would get too wide to draw.
   function selectClip(id: string) {
     if (id !== selectedId) changeInspectorOpen(true);
     setSelectedId(id);
-    const clip = clipsRef.current.find((c) => c.instanceId === id);
-    if (!clip) return;
-    const track = trackById.get(clip.trackId);
-    const src = sourceDuration(track, getCachedPeaks(clip.trackId) ?? null);
-    setEditorPxPerSec(fitPxPerSec(src));
   }
 
   async function copyToEdit() {

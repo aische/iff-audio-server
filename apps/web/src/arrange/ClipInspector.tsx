@@ -321,8 +321,11 @@ export function ClipInspector({
                     title="Zoom out waveform"
                     onClick={() => {
                       // Long tracks need less than the minimum to fit whole.
+                      // From the zoom shown: the kept one may be above this
+                      // track's cap.
                       const floor = Math.min(PX_PER_SEC_MIN, fitPx() ?? Infinity);
-                      onZoom((p) => Math.min(p, Math.max(floor, p / 1.25)));
+                      const px = scale.effectivePx;
+                      onZoom(() => Math.min(px, Math.max(floor, px / 1.25)));
                     }}
                   >
                     −
@@ -331,7 +334,9 @@ export function ClipInspector({
                     type="button"
                     className="filterButton"
                     title="Zoom in waveform"
-                    onClick={() => onZoom((p) => Math.min(scale.maxPx, p * 1.25))}
+                    onClick={() =>
+                      onZoom(() => Math.min(scale.maxPx, scale.effectivePx * 1.25))
+                    }
                   >
                     +
                   </button>
