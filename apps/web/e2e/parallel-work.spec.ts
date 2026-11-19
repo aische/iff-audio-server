@@ -13,6 +13,7 @@ import {
   row,
   test,
   trackId,
+  unique,
 } from "./helpers.ts";
 
 const { alpha, bravo, charlie } = TRACKS;
@@ -38,12 +39,14 @@ test("editing comment and tags on another track keeps A playing", async ({
   await play(page, alpha);
   await expectPlaying(page, alpha);
 
+  const note = unique("parallel note");
+  const tag = unique("groove");
   const b = row(page, bravo);
-  await b.getByLabel(`Comment for ${bravo}`).fill("parallel note");
+  await b.getByLabel(`Comment for ${bravo}`).fill(note);
   await blur(page);
   await expect(b.locator(".save-hint")).toHaveText("✓");
 
-  await addTag(page, bravo, "groove");
+  await addTag(page, bravo, tag);
 
   await expectPlaying(page, alpha);
 
@@ -52,11 +55,16 @@ test("editing comment and tags on another track keeps A playing", async ({
   const tracks = (await (await page.request.get("/api/tracks")).json()) as {
     id: string;
     comments: { body: string }[];
-    tags: unknown[];
+    tags: { tagId: string }[];
   }[];
   const saved = tracks.find((t) => t.id === id)!;
-  expect(saved.comments.map((c) => c.body)).toContain("parallel note");
-  expect(saved.tags).toHaveLength(1);
+  expect(saved.comments.map((c) => c.body)).toContain(note);
+  const tags = (await (await page.request.get("/api/tags")).json()) as {
+    id: string;
+    name: string;
+  }[];
+  const tagId = tags.find((t) => t.name === tag)?.id;
+  expect(saved.tags.map((l) => l.tagId)).toContain(tagId);
 });
 
 test("filtering A out of the list keeps it playing and offers to show it", async ({
@@ -103,7 +111,7 @@ test("checking tracks and building an arrangement keeps A playing", async ({
   await expectPlaying(page, alpha);
 
   await page.getByRole("button", { name: "new arrangement" }).click();
-  await page.getByLabel("New arrangement name").fill("parallel cut");
+  await page.getByLabel("New arrangement name").fill(unique("parallel cut"));
   await page.getByRole("button", { name: "create", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Arrange", exact: true }),

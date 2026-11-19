@@ -14,6 +14,8 @@ import {
 } from "./api";
 import { ArrangeShell, type ArrangeAddApi } from "./ArrangeView";
 import { newClipForTrack } from "./clips";
+import { usePlayback } from "./playback";
+import { PlaybackProvider } from "./PlaybackProvider";
 import { TrackInspector } from "./TrackInspector";
 import { useChangeFeed } from "./useChangeFeed";
 import { useLibrary } from "./useLibrary";
@@ -113,15 +115,17 @@ export default function App() {
   }
 
   return (
-    <StudioShell
-      user={user}
-      onLogout={() => {
-        setUser(null);
-        setError(null);
-      }}
-      error={error}
-      onError={setError}
-    />
+    <PlaybackProvider>
+      <StudioShell
+        user={user}
+        onLogout={() => {
+          setUser(null);
+          setError(null);
+        }}
+        error={error}
+        onError={setError}
+      />
+    </PlaybackProvider>
   );
 }
 
@@ -192,9 +196,9 @@ function StudioShell({
   error: string | null;
   onError: (message: string | null) => void;
 }) {
-  // Library transport only. Independent of search/filter/focus: query may
+  // Library playback only. Independent of search/filter/focus: query may
   // hide this track from the list without stopping playback (see better-ux.md).
-  const [playing, setPlaying] = useState<Track | null>(null);
+  const playback = usePlayback();
   // Track of the clip selected in the open arrangement; the library
   // highlights it in arrange mode.
   const [arrangeSelectedTrackId, setArrangeSelectedTrackId] = useState<
@@ -308,16 +312,16 @@ function StudioShell({
 
   /** Play a track in the transport, or unload it if it is the current one. */
   function togglePlayTrack(track: Track) {
-    if (playing?.id === track.id) {
-      setPlaying(null);
+    if (playback.track?.id === track.id) {
+      playback.stop();
       return;
     }
     setStopToken((n) => n + 1);
-    setPlaying(track);
+    playback.play(track);
   }
 
   function onArrangementPlayingChange(playingArr: boolean) {
-    if (playingArr) setPlaying(null);
+    if (playingArr) playback.stop();
   }
 
   const tagsById = new Map(tags.map((t) => [t.id, t]));
@@ -344,8 +348,9 @@ function StudioShell({
   const visible = sortTracks(filtered, sort);
   // Prefer live library row so transport title/duration stay fresh; keep the
   // snapshot if the file vanished from the DB mid-play.
-  const playingTrack = playing
-    ? (tracks.find((t) => t.id === playing.id) ?? playing)
+  const loaded = playback.track;
+  const playingTrack = loaded
+    ? (tracks.find((t) => t.id === loaded.id) ?? loaded)
     : null;
   const playingHiddenByFilters =
     playingTrack != null && !visible.some((t) => t.id === playingTrack.id);
@@ -536,9 +541,6 @@ function StudioShell({
           track={playingTrack}
           hiddenByFilters={playingHiddenByFilters}
           onRevealInList={revealPlayingInList}
-          onEnded={() => {
-            /* keep last track loaded in transport */
-          }}
         />
 
         <div className="toolbar">

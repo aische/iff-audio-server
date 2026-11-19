@@ -12,6 +12,7 @@ import {
   readStorage,
   row,
   test,
+  unique,
 } from "./helpers.ts";
 
 const { alpha, charlie, delta } = TRACKS;
@@ -42,11 +43,13 @@ test("search hides A: clears the search, keeps hide-released on", async ({
 });
 
 test("search hides A: keeps a tag filter that A matches", async ({ page }) => {
-  await addTag(page, charlie, "keep");
+  const tag = unique("keep");
+  await addTag(page, charlie, tag);
   await row(page, charlie)
-    .locator(".tag-chip-name", { hasText: "keep" })
+    .locator(".tag-chip-name", { hasText: tag })
     .click();
-  await expect(page.getByRole("button", { name: "clear keep" })).toBeVisible();
+  const clearTag = page.getByRole("button", { name: `clear ${tag}` });
+  await expect(clearTag).toBeVisible();
 
   await play(page, charlie);
   await page.getByLabel("Search tracks").fill("zzz");
@@ -55,7 +58,7 @@ test("search hides A: keeps a tag filter that A matches", async ({ page }) => {
   await page.locator(".transport-reveal").click();
 
   await expect(page.getByLabel("Search tracks")).toHaveValue("");
-  await expect(page.getByRole("button", { name: "clear keep" })).toBeVisible();
+  await expect(clearTag).toBeVisible();
   await expect(row(page, charlie)).toBeVisible();
   await expect(row(page, alpha)).toHaveCount(0);
   await expectPlaying(page, charlie);

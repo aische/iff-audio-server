@@ -98,3 +98,11 @@ export async function addTag(page: Page, filename: string, name: string) {
   await page.keyboard.press("Enter");
   await expect(r.locator(".tag-chip-name", { hasText: name })).toBeVisible();
 }
+
+/**
+ * A name no earlier test in this database used (arrangement names are
+ * unique, and re-saving the same comment is a no-op), so tests can repeat.
+ */
+export function unique(name: string) {
+  return `${name}-${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
+}
