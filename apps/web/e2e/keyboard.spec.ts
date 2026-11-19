@@ -188,3 +188,38 @@ test("k with nothing focused goes to the last row and scrolls to it", async ({
   await expect(up).toHaveClass(/track-focused/);
   await expect(up).toBeInViewport();
 });
+
+test("the key map opens with ? (button or key) and closes with esc", async ({
+  page,
+}) => {
+  const map = page.getByRole("region", { name: "Keyboard shortcuts" });
+  const button = page.getByRole("button", { name: "Keyboard shortcuts" });
+  await expect(map).toHaveCount(0);
+
+  await button.click();
+  await expect(map).toBeVisible();
+  await expect(map).toContainText("play the focused track");
+  await expect(map.locator("kbd", { hasText: "space" })).toBeVisible();
+  await button.click();
+  await expect(map).toHaveCount(0);
+
+  await page.keyboard.press("?");
+  await expect(map).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(map).toHaveCount(0);
+
+  // Typing ? in a field is just text.
+  const search = page.getByLabel("Search tracks");
+  await search.fill("");
+  await search.press("?");
+  await expect(search).toHaveValue("?");
+  await expect(map).toHaveCount(0);
+
+  // Library keys only exist in pool mode, and so does the key map.
+  await page.getByRole("button", { name: "Arrange", exact: true }).click();
+  await expect(button).toHaveCount(0);
+  await page.locator(".studio-brand").click();
+  await page.keyboard.press("?");
+  await expect(map).toHaveCount(0);
+  await page.getByRole("button", { name: "Pool", exact: true }).click();
+});

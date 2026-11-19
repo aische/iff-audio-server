@@ -14,6 +14,7 @@ import {
 } from "./api";
 import { ArrangeShell, type ArrangeAddApi } from "./ArrangeView";
 import { newClipForTrack } from "./clips";
+import { KeyMap } from "./KeyMap";
 import { usePlayback } from "./playback";
 import { PlaybackProvider } from "./PlaybackProvider";
 import { TrackInspector } from "./TrackInspector";
@@ -221,6 +222,8 @@ function StudioShell({
   const [showInspector, setShowInspector] = useState(readShowInspector);
   const [accountOpen, setAccountOpen] = useState(false);
   const [tagsOpen, setTagsOpen] = useState(false);
+  // Key map panel (pool mode; the library keys only work there).
+  const [keysOpen, setKeysOpen] = useState(false);
   const [mode, setMode] = useState<AppMode>(readMode);
   // Mounted on first visit, then kept (hidden in pool mode) so the open
   // arrangement and its pending edits survive mode switches.
@@ -432,6 +435,12 @@ function StudioShell({
     commentFocused() {
       if (focusedVisible) openComment(focusedVisible.id);
     },
+    toggleKeyMap: () => setKeysOpen((v) => !v),
+    escape() {
+      if (!keysOpen) return false;
+      setKeysOpen(false);
+      return true;
+    },
   });
 
   // The comment field needs a row in the library (not a vanished file).
@@ -562,6 +571,20 @@ function StudioShell({
             </button>
           </div>
           <div className="toolbar-right">
+            {mode === "pool" && (
+              <button
+                type="button"
+                className={
+                  keysOpen ? "filterButton filterSelected" : "filterButton"
+                }
+                aria-pressed={keysOpen}
+                aria-label="Keyboard shortcuts"
+                title="Keyboard shortcuts (?)"
+                onClick={() => setKeysOpen((v) => !v)}
+              >
+                ?
+              </button>
+            )}
             <button
               type="button"
               className={
@@ -634,6 +657,10 @@ function StudioShell({
           onError={onError}
           onClose={() => setAccountOpen(false)}
         />
+      )}
+
+      {keysOpen && mode === "pool" && (
+        <KeyMap onClose={() => setKeysOpen(false)} />
       )}
 
       {tagsOpen && (

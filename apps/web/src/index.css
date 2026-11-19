@@ -1498,6 +1498,47 @@ body {
   max-width: 280px;
 }
 
+/* Key map (? button): library keys, tape-desk style. */
+.keymap-table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.keymap-table th,
+.keymap-table td {
+  padding: 2px 12px 2px 0;
+  text-align: left;
+  vertical-align: baseline;
+}
+
+.keymap-table th {
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.keymap-table td {
+  color: var(--text-dim);
+}
+
+.keymap kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  color: var(--accent);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+}
+
+.keymap-or {
+  color: var(--text-faint);
+}
+
 .account-actions {
   display: flex;
   gap: 6px;

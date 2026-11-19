@@ -36,6 +36,10 @@ export type LibraryKeyActions = {
   togglePause: () => void;
   /** c: open the comment field on the focused row. */
   commentFocused: () => void;
+  /** ?: show or hide the key map. */
+  toggleKeyMap: () => void;
+  /** esc outside a field: close the key map; false if nothing to close. */
+  escape: () => boolean;
 };
 
 /**
@@ -87,6 +91,13 @@ export function useLibraryShortcuts(
         // preventDefault keeps the "c" out of the field it opens.
         e.preventDefault();
         if (!e.repeat) actions.commentFocused();
+        return;
+      case "?":
+        e.preventDefault();
+        if (!e.repeat) actions.toggleKeyMap();
+        return;
+      case "Escape":
+        if (actions.escape()) e.preventDefault();
         return;
     }
   });
