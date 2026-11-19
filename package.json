@@ -12,7 +12,8 @@
         "lint": "npm run lint --workspaces --if-present",
         "docker:build": "docker build --platform linux/amd64 -f deploy/k3s/Dockerfile.api -t iff-api:local . && docker build --platform linux/amd64 -f deploy/k3s/Dockerfile.web -t iff-web:local .",
         "deploy:k3s:upload": "./deploy/k3s/deploy.sh upload",
-        "deploy:k3s:apply": "./deploy/k3s/deploy.sh apply"
+        "deploy:k3s:apply": "./deploy/k3s/deploy.sh apply",
+        "e2e": "npm run e2e -w web"
     },
     "devDependencies": {
         "concurrently": "^9.2.1"

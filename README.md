@@ -101,6 +101,16 @@ Health check (API directly):
 curl http://localhost:3000/health
 ```
 
+## End-to-end tests
+
+Playwright tests in `apps/web/e2e/` drive the real app in headless Chromium. They need the same Postgres and ffmpeg as dev, and Chromium once (`npx playwright install chromium`).
+
+```bash
+npm run e2e
+```
+
+Each run recreates a separate database, `iff_e2e` on the server from `DATABASE_URL` (or set `E2E_DATABASE_URL`), generates a few MP3s in `tmp/e2e/library`, and starts its own API (port 3100) and web (port 5174). Dev data and dev servers are not touched.
+
 ## Admin tools
 
 There is no registration or browser upload. Use these CLIs (require `DATABASE_URL`; sync/rename also require `LIBRARY_PATH`):

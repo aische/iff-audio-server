@@ -22,7 +22,8 @@ export default defineConfig(({ mode }) => {
     server: {
       proxy: {
         "/api": {
-          target: "http://localhost:3000",
+          // Overridden by the e2e tests, which run their own API.
+          target: process.env.API_PROXY_TARGET || "http://localhost:3000",
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/api/, ""),
         },
